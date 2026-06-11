@@ -143,7 +143,8 @@ def plot_debug(signal, fs, lo, hi, threshold, min_duration_ms, save=None, title=
     ax_pulse.set_xlabel("time [ms]")
 
     # 検出ON区間を帯で重ねる。包絡線段(下2段)は濃いめ＋種別ラベル、上2段は薄く時間合わせ用。
-    label_y = float(env.max()) if len(env) and env.max() > 0 else 1.0
+    env_max = float(env.max()) if len(env) else 0.0
+    label_y = env_max if env_max > 0 else 1.0
     for start_ms, dur_ms in pulses:
         kind = classify_pulse(dur_ms)
         color = _KIND_COLOR.get(kind, "tab:gray")
