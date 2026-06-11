@@ -22,6 +22,10 @@ def main():
     try:
         from src.channels.mic import MicChannel
     except ModuleNotFoundError as e:
+        # 想定依存の未導入だけ「pip install」へ誘導する。mic.py 側の相対 import
+        # 不備など想定外の ModuleNotFoundError はそのまま送出して原因を隠さない。
+        if e.name not in {"sounddevice", "numpy", "scipy"}:
+            raise
         print(f"依存モジュールが見つかりません: {e}")
         print("pip install sounddevice numpy scipy を実行してください。")
         sys.exit(1)
