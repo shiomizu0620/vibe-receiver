@@ -26,7 +26,7 @@ def _silence(dur_ms):
 
 
 def _build(durations_ms, gap_ms=config.GAP_MS, lead_ms=100.0):
-    """各 dur のバーストを gap で区切って連結。期待される ON区間長のリストも返す。"""
+    """各 dur のバーストを gap で区切って連結した合成波形（1次元 numpy 配列）を返す。"""
     parts = [_silence(lead_ms)]
     for d in durations_ms:
         parts.append(_burst(d))
@@ -61,6 +61,7 @@ def test_start_times_are_ordered_and_spaced():
     """start_ms が時間順で、gap 分だけ離れている（境界の時刻も保たれる）。"""
     durs = [config.SHORT_MS, config.LONG_MS, config.SHORT_MS]
     pulses = _run(_build(durs, lead_ms=100.0))
+    assert len(pulses) == len(durs)  # 検出漏れ時に starts[1] の IndexError ではなく意味のある失敗にする
 
     starts = [s for s, _ in pulses]
     assert starts == sorted(starts)

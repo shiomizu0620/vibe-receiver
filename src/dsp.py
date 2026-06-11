@@ -19,6 +19,8 @@ def bandpass(signal, fs, lo, hi, order=4):
     sosfiltfilt で前後双方向に掛けるため位相遅れがなく、ON区間の時間が保たれる
     （パルス長で 0/1 を判定するこのプロトコルでは時間の正確さが命）。
     """
+    if fs <= 0:
+        raise ValueError(f"fs must be > 0; got fs={fs}")
     sig = np.asarray(signal, dtype=float)
     nyq = fs / 2.0
     if not 0 < lo < hi < nyq:
@@ -34,6 +36,8 @@ def envelope(signal, fs, smooth_ms=10.0):
     立ち上がり/立ち下がりが同じだけ滑らかになる → ON区間長が保たれる。
     smooth_ms はキャリアのリップルを均す時定数（パルス長 150ms より十分小さく取る）。
     """
+    if fs <= 0:
+        raise ValueError(f"fs must be > 0; got fs={fs}")
     sig = np.asarray(signal, dtype=float)
     win = max(1, int(round(smooth_ms * 1e-3 * fs)))
     kernel = np.ones(win) / win
@@ -46,6 +50,8 @@ def to_pulses(envelope, fs, threshold, min_duration_ms=0.0):
     出力形式は decode.decode_pulses の入力（PulseEvent 相当）に一致する。
     min_duration_ms 未満の短い ON はノイズとして捨てる（既定 0 = 捨てない）。
     """
+    if fs <= 0:
+        raise ValueError(f"fs must be > 0; got fs={fs}")
     env = np.asarray(envelope, dtype=float)
     on = env >= threshold
     # 両端を False でパディングし、境界に張り付いた ON もエッジとして拾う
