@@ -47,6 +47,13 @@ tests/
 1. プリアンブル（700ms級ON×2）検出 → 2. ONパルス長 <300ms→0 / ≥300ms→1（MSB first）
 3. モードマーカー1bit（0=idモード）→ ペイロード8bit で完了（終端なし・固定長）
 
+## ブランチ運用
+- **ブランチ名は `<type>/<issue番号>-<内容>` 形式**（type: `feat` / `fix` / `docs` / `chore`）
+  例: `feat/R2-dsp`, `fix/R4-mic-threshold`, `chore/ci`
+- **1 issue = 1 ブランチ = 1 PR**。複数issueを1ブランチ/1PRにまとめない。
+- **PRタイトルは `[R2] dsp実装` の形式**（`[<issue番号>] <内容>`）。
+- **`main` への直push禁止**。変更は必ずPR経由でマージする。
+
 ## 環境メモ
 - Windows。デバイス確認は `python -c "import sounddevice as sd; print(sd.query_devices())"`
 - バンドパス帯域は送信実機の録音（Vibes側 F8 の成果物）をFFT/スペクトログラムで見て決める。
