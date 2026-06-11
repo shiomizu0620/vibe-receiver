@@ -2,7 +2,7 @@
 
 R6 では会場ネットワークやDBに依存せず動かすため、固定辞書で id→URL を引くだけのスタブ。
 R9 で supabase-py による実装に**中身だけ**差し替える前提で、インターフェースはここで確定しておく。
-  - lookup_url(id) -> str | None : id に対応する URL を返す。未登録なら None。
+  - lookup_url(message_id) -> str | None : message_id に対応する URL を返す。未登録なら None。
 main/display はこの関数しか知らないので、R9 で内部実装が変わっても呼び出し側は無修正でよい。
 """
 
@@ -15,9 +15,9 @@ _STUB_URLS = {
 }
 
 
-def lookup_url(id: int) -> str | None:
-    """id に対応する URL を返す。未登録なら None。
+def lookup_url(message_id: int) -> str | None:
+    """message_id に対応する URL を返す。未登録なら None。
 
     R9 で Supabase 逆引き（anon key・SELECT のみ）に差し替える。シグネチャは据え置く。
     """
-    return _STUB_URLS.get(id)
+    return _STUB_URLS.get(message_id)

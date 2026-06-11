@@ -24,10 +24,8 @@ from src.channels import ReplayChannel
 from src.decode import DecodeError, decode_pulses
 from src.lookup import lookup_url
 
-# 1フレームのパルス数: プリアンブル + モードマーカー + ペイロード。定数は config から算出（ハードコードしない）。
-FRAME_PULSES = config.PREAMBLE_REPEAT + 1 + config.ID_BITS
-# バッファ上限: フレーム未完が続いてもノイズで無限に伸びないよう、末尾だけ残してトリムする閾値。
-_MAX_BUFFER_PULSES = 2 * FRAME_PULSES
+# バッファ上限: フレーム未完が続いてもノイズで無限に伸びないよう、末尾だけ残してトリムする閾値（定数は config）。
+_MAX_BUFFER_PULSES = config.MAX_BUFFER_FRAMES * config.FRAME_PULSES
 
 
 class Receiver:
@@ -68,7 +66,7 @@ def build_frame_pulses(ids, t0=0.0, frame_gap_ms=None):
     decode は ON 長しか見ない（gap は無視）ので、gap 値は実時間再生のタイミングだけに効く。
     """
     if frame_gap_ms is None:
-        frame_gap_ms = config.GAP_MS * 3  # フレーム境界は広めに空ける
+        frame_gap_ms = config.GAP_MS * config.FRAME_GAP_MULTIPLIER  # フレーム境界は広めに空ける
     pulses: list[tuple[float, float]] = []
     t = float(t0)
     for i, mid in enumerate(ids):

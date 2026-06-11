@@ -4,7 +4,8 @@ ReplayChannel → Receiver.feed → decode の結合を、センサー無し・�
 R6 完了条件「id=42 が end-to-end で表示され、続けて次のメッセージも受けられる」を直接確認する。
 """
 from src.channels import ReplayChannel
-from src.main import FRAME_PULSES, Receiver, build_frame_pulses
+from src.config import FRAME_PULSES
+from src.main import Receiver, build_frame_pulses
 
 
 def test_replay_continuous_two_messages():
