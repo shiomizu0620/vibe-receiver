@@ -13,10 +13,19 @@ import time
 # `python src/mic_test.py` 直叩きでも src.* を解決できるようにリポジトリ root を通す
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from src.channels.mic import MicChannel  # noqa: E402
-
 
 def main():
+    # import は main() 内に遅延させる。トップレベルに置くと、このファイルが
+    # pytest の収集対象（*_test.py）に当たるため、収集時に sounddevice を読み込んで
+    # しまい、未導入の CI で ModuleNotFoundError になる（手動実行用スクリプトなので
+    # 依存は実行時にだけ要求する）。
+    try:
+        from src.channels.mic import MicChannel
+    except ModuleNotFoundError as e:
+        print(f"依存モジュールが見つかりません: {e}")
+        print("pip install sounddevice numpy scipy を実行してください。")
+        sys.exit(1)
+
     ap = argparse.ArgumentParser(description="マイクのパルス検出を数秒ためす")
     ap.add_argument("--device", type=int, default=None,
                     help="入力デバイス番号（python src/list_devices.py で確認）")

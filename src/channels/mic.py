@@ -72,16 +72,27 @@ class MicChannel(Channel):
         self._thread = threading.Thread(
             target=self._run, args=(on_pulse,), daemon=True
         )
-        self._thread.start()
-
-        self._stream = sd.InputStream(
-            samplerate=self.fs,
-            device=self.device,
-            channels=1,
-            dtype="float32",
-            callback=self._audio_callback,
-        )
-        self._stream.start()
+        # ストリームを先に開始し、成功してからワーカーを起動する。
+        # 途中で例外が出たら確実に後始末してワーカーを孤立させない。
+        try:
+            self._stream = sd.InputStream(
+                samplerate=self.fs,
+                device=self.device,
+                channels=1,
+                dtype="float32",
+                callback=self._audio_callback,
+            )
+            self._stream.start()
+            self._thread.start()
+        except Exception:
+            self._stop_event.set()
+            if self._stream is not None:
+                self._stream.close()
+                self._stream = None
+            if self._thread.is_alive():
+                self._thread.join(timeout=2.0)
+            self._thread = None
+            raise
 
     def _audio_callback(self, indata, frames, time_info, status) -> None:
         """PortAudio スレッドから呼ばれる。重い処理はせず、モノラル化してキューへ。"""
@@ -166,4 +177,6 @@ class MicChannel(Channel):
             self._stream = None
         if self._thread is not None:
             self._thread.join(timeout=2.0)
-            self._thread = None
+            # タイムアウトで生存していたら参照を残す（再 start 時の二重起動を防ぐ）
+            if not self._thread.is_alive():
+                self._thread = None
