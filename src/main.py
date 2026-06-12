@@ -23,7 +23,7 @@ from src import config
 from src.channels import ReplayChannel
 from src.decode import DecodeError, decode_pulses
 from src.display import Display
-from src.lookup import lookup_url
+from src.lookup import get_lookup
 
 # バッファ上限: フレーム未完が続いてもノイズで無限に伸びないよう、末尾だけ残してトリムする閾値（定数は config）。
 _MAX_BUFFER_PULSES = config.MAX_BUFFER_FRAMES * config.FRAME_PULSES
@@ -123,6 +123,8 @@ def main(argv=None) -> None:
     ap.add_argument("--min-duration-ms", type=float, default=30.0, help="デバウンス長（mic）")
     ap.add_argument("--no-open", action="store_true",
                     help="URL を表示するだけでブラウザを開かない")
+    ap.add_argument("--offline", action="store_true",
+                    help="Supabase に繋がずローカル固定辞書で逆引き（会場 Wi-Fi 死亡時のデモ保険）")
     args = ap.parse_args(argv)
 
     # Windows の既定コンソールが cp932 でも演出の記号で落ちないよう、出力を UTF-8 にしておく。
@@ -134,8 +136,8 @@ def main(argv=None) -> None:
             pass
 
     channel = _build_channel(args)
-    # 演出層。lookup スタブと webbrowser は Display が内部で持つ（R9 で lookup の中身だけ差し替わる）。
-    display = Display(lookup=lookup_url, no_open=args.no_open)
+    # 演出層。lookup は --offline でローカル辞書／既定で Supabase 逆引きを選ぶ（webbrowser は Display が内部で持つ）。
+    display = Display(lookup=get_lookup(offline=args.offline), no_open=args.no_open)
     receiver = Receiver(on_frame=display.on_frame)
 
     # チャンネルからの ON パルスを「ライブ演出(on_pulse)」と「復号(receiver.feed)」へ分配する。
@@ -145,6 +147,10 @@ def main(argv=None) -> None:
         receiver.feed(pulse)
 
     display.show_header(args.channel)
+    if args.offline:
+        # 逆引き元がローカル辞書であることを明示（オンライン本線と取り違えないように）。
+        print("[main] --offline: ローカル固定辞書で逆引きします（Supabase へは接続しません）",
+              file=sys.stderr)
     channel.start(on_pulse)
     try:
         # 受信ループ: 何メッセージでも待ち受ける。実処理はチャンネルのワーカースレッドが on_pulse 経由で進める。

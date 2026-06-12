@@ -22,7 +22,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest numpy scipy rich
+          pip install pytest numpy scipy rich supabase python-dotenv
 
       - name: Run tests
         run: pytest
