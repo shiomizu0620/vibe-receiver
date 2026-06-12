@@ -9,7 +9,7 @@
 復号失敗（プリアンブル未検出・フレーム未完など）は落ちずにスキップして次を待つ。
 
 CLAUDE.md のアーキテクチャ方針どおり、ここはどのチャンネルかを知らない（PulseEvent 列しか見ない）。
-rich のタイプ風演出と webbrowser でのオープンは R7（display.py）、本物の Supabase 逆引きは R9 の担当。
+rich のタイプ風演出と webbrowser でのオープンは display.py（R7）、本物の Supabase 逆引きは R9 の担当。
 """
 import argparse
 import pathlib
@@ -22,6 +22,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from src import config
 from src.channels import ReplayChannel
 from src.decode import DecodeError, decode_pulses
+from src.display import Display
 from src.lookup import lookup_url
 
 # バッファ上限: フレーム未完が続いてもノイズで無限に伸びないよう、末尾だけ残してトリムする閾値（定数は config）。
@@ -86,16 +87,6 @@ def build_frame_pulses(ids, t0=0.0, frame_gap_ms=None):
     return pulses
 
 
-def _handle_frame(frame) -> None:
-    """確定フレームを表示する。lookup スタブで id→URL を引くだけ（演出は R7、実DBは R9）。"""
-    if frame.id is None:
-        # モードマーカー=1（直接符号化 stretch）。R6 では id モードのみ扱う。
-        print(f"受信: mode={frame.mode}（idモード以外。R6では未対応）")
-        return
-    url = lookup_url(frame.id)
-    print(f"受信: id={frame.id} -> {url if url is not None else '(未登録)'}")
-
-
 def _parse_ids(spec: str) -> list[int]:
     """'42,7' のようなカンマ区切り文字列を id のリストに変換する。"""
     return [int(part) for part in spec.split(",") if part.strip() != ""]
@@ -130,19 +121,37 @@ def main(argv=None) -> None:
     ap.add_argument("--hi", type=float, default=400.0, help="バンドパス上限Hz（mic, 仮値）")
     ap.add_argument("--threshold", type=float, default=0.02, help="包絡線の閾値（mic, 仮値）")
     ap.add_argument("--min-duration-ms", type=float, default=30.0, help="デバウンス長（mic）")
+    ap.add_argument("--no-open", action="store_true",
+                    help="URL を表示するだけでブラウザを開かない")
     args = ap.parse_args(argv)
 
-    channel = _build_channel(args)
-    receiver = Receiver(on_frame=_handle_frame)
+    # Windows の既定コンソールが cp932 でも演出の記号で落ちないよう、出力を UTF-8 にしておく。
+    # （対応端末では絵文字級も化けず出る。reconfigure 非対応の stdout でも握りつぶして続行する。）
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError):
+            pass
 
-    print(f"受信待機中（channel={args.channel}）。Ctrl+C で終了。")
-    channel.start(receiver.feed)
+    channel = _build_channel(args)
+    # 演出層。lookup スタブと webbrowser は Display が内部で持つ（R9 で lookup の中身だけ差し替わる）。
+    display = Display(lookup=lookup_url, no_open=args.no_open)
+    receiver = Receiver(on_frame=display.on_frame)
+
+    # チャンネルからの ON パルスを「ライブ演出(on_pulse)」と「復号(receiver.feed)」へ分配する。
+    # on_pulse を先に呼ぶことで、最後のビット記号が並んだ直後に id 確定表示が続く順序になる。
+    def on_pulse(pulse) -> None:
+        display.on_pulse(pulse)
+        receiver.feed(pulse)
+
+    display.show_header(args.channel)
+    channel.start(on_pulse)
     try:
-        # 受信ループ: 何メッセージでも待ち受ける。実処理はチャンネルのワーカースレッドが feed 経由で進める。
+        # 受信ループ: 何メッセージでも待ち受ける。実処理はチャンネルのワーカースレッドが on_pulse 経由で進める。
         while True:
             time.sleep(0.5)
     except KeyboardInterrupt:
-        print("\n終了します。")
+        display.show_footer()
     finally:
         channel.stop()
 
