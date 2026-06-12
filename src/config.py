@@ -17,3 +17,8 @@ ID_BITS = 8             # id は 8bit 固定 (0..255)
 MSB_FIRST = True
 MODE_ID = 0             # モードマーカー 0 = idモード（本線）
 MODE_DIRECT = 1         # 1 = 直接符号化（stretch）
+
+# 受信側の派生/運用定数（PROTOCOL.md には無い。受信ループの実装都合。定数は config.py に集約する）
+FRAME_PULSES = PREAMBLE_REPEAT + 1 + ID_BITS  # 1フレームのONパルス数: プリアンブル + モードマーカー + ペイロード
+MAX_BUFFER_FRAMES = 2        # バッファ上限をフレーム何個分まで許すか（ノイズで無限に伸びるのを防ぐ）
+FRAME_GAP_MULTIPLIER = 3     # 連続受信時のフレーム境界ギャップを GAP_MS の何倍空けるか
