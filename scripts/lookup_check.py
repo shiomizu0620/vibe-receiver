@@ -16,6 +16,7 @@ from src.lookup import lookup_url  # noqa: E402  （sys.path 設定後に import
 
 
 def main(argv=None) -> int:
+    """引数の id を順に Supabase で逆引きして表示する。終了コード: 正常=0 / 引数不正=2。"""
     argv = sys.argv[1:] if argv is None else list(argv)
     if not argv:
         print("usage: python -m scripts.lookup_check <id> [<id> ...]", file=sys.stderr)

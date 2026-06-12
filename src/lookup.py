@@ -18,9 +18,6 @@ from collections.abc import Callable
 
 from . import config
 
-# id の有効範囲（PROTOCOL.md: 8bit 固定 = 0..255）。範囲外は逆引きせず None を返す。
-_MAX_ID = (1 << config.ID_BITS) - 1
-
 # Supabase クライアントは初回アクセス時に1度だけ生成してキャッシュする（毎回 .env を読まない）。
 _client = None
 
@@ -59,8 +56,11 @@ def lookup_url(message_id: int) -> str | None:
     anon key で SELECT 逆引きのみ。ネット断・DB エラー・env 未設定でも**落とさず** None を返す
     （受信ループを止めないため）。原因は stderr に日本語で出す（鍵は出力しない）。
     """
-    # 範囲外（負値や 8bit 超）は問い合わせる前に弾く。decode は 0..255 を返すので通常は通過。
-    if not (0 <= message_id <= _MAX_ID):
+    # 不正値（非整数・bool・負値・8bit 超）は問い合わせる前に弾く。decode は 0..255 を返すので通常は通過。
+    # 型チェックを先に行うのは、非整数で比較が TypeError を投げて「落とさず None」の契約を破らないため。
+    if not isinstance(message_id, int) or isinstance(message_id, bool):
+        return None
+    if not (0 <= message_id <= config.MAX_MESSAGE_ID):
         return None
     try:
         client = _get_client()

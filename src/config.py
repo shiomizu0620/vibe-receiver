@@ -14,6 +14,7 @@ PREAMBLE_MIN_MS = 550          # これ以上のONはプリアンブル候補（
 
 # フレーム
 ID_BITS = 8             # id は 8bit 固定 (0..255)
+MAX_MESSAGE_ID = (1 << ID_BITS) - 1  # id の最大値 255。範囲外は逆引きしない（lookup で使用）
 MSB_FIRST = True
 MODE_ID = 0             # モードマーカー 0 = idモード（本線）
 MODE_DIRECT = 1         # 1 = 直接符号化（stretch）
