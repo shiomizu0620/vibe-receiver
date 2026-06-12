@@ -1,0 +1,13 @@
+# ローカル導入用の依存（pip install -r requirements.txt）。
+# CI は .github/workflows/python_ci.yml の明示リストを使う（sounddevice は CI 不要のため別管理）。
+
+# 受信本体・DSP
+numpy
+scipy
+# ターミナル演出
+rich
+# Supabase 逆引き（R9）と .env 読み込み
+supabase
+python-dotenv
+# マイク入力（mic チャンネル使用時のみ。CI/テストでは不要）
+sounddevice
