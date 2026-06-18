@@ -14,6 +14,7 @@
 - ビット表示は decode と同じ判定基準を使う（src.decode.classify_pulse の再利用＝二重実装しない）。
   ライブ行はチャンネルから届く「生のパルス」を順に描くだけの飾りで、id の真値は必ず decode（on_frame の Frame）に従う。
 """
+import logging
 import time
 import webbrowser
 
@@ -25,6 +26,8 @@ from rich.text import Text
 from . import config
 from .decode import classify_pulse
 from .lookup import lookup_url
+
+_LOGGER = logging.getLogger(__name__)
 
 # ビット記号（PROTOCOL.md: 短 150ms=0 / 長 450ms=1）。issue 指定どおり ●=0, ━=1。
 SHORT_GLYPH = "●"   # 短い振動 = bit 0
@@ -86,7 +89,8 @@ class Display:
         try:
             self._on_event(event)
         except Exception:
-            pass  # ブラウザ配信の不調でターミナル演出・受信を巻き込まない
+            # ブラウザ配信の不調でターミナル演出・受信を巻き込まない。原因は debug ログに残す。
+            _LOGGER.debug("on_event フックの呼び出しに失敗: %r", event, exc_info=True)
 
     # ---- 起動/終了の飾り（main から呼ぶ） -------------------------------------
 
@@ -96,7 +100,7 @@ class Display:
             f"[bold]バイブコード受信[/]  channel=[cyan]{channel_name}[/]\n"
             "[dim]Ctrl+C で終了[/]",
             title="待機中", border_style="green", box=_BOX))
-        self._emit({"type": "listening"})  # 待機開始をブラウザへ
+        self._emit({"type": config.WS_EVENT_LISTENING})  # 待機開始をブラウザへ
 
     def show_footer(self) -> None:
         """終了メッセージ。"""
@@ -128,7 +132,7 @@ class Display:
             self._console.print(Text(glyph_for_bit(bit) + " ",
                                      style=_BIT_STYLE[bit]), end="")
             # データビット確定（モードマーカーは除く・MSB first で1個ずつ）をブラウザへ。
-            self._emit({"type": "bit", "value": bit})
+            self._emit({"type": config.WS_EVENT_BIT, "value": bit})
 
     def _start_frame(self) -> None:
         """プリアンブル検出 → 「受信開始」表示してビット行の描画を始める。"""
@@ -139,7 +143,7 @@ class Display:
                                        "[dim]プリアンブル検出[/]",
                                        border_style="green", box=_BOX))
         self._console.print("  ", end="")  # ビット行のインデント
-        self._emit({"type": "preamble"})   # プリアンブル検出をブラウザへ
+        self._emit({"type": config.WS_EVENT_PREAMBLE})   # プリアンブル検出をブラウザへ
 
     # ---- フレーム確定ごとの演出 -----------------------------------------------
 
@@ -158,14 +162,14 @@ class Display:
         self._console.print(Panel.fit(
             f"id = [bold white]{frame.id}[/]\n[dim]bits[/] {glyphs}",
             title="復元", border_style="cyan", box=_BOX))
-        self._emit({"type": "decoded", "id": frame.id})  # id 確定をブラウザへ
+        self._emit({"type": config.WS_EVENT_DECODED, "id": frame.id})  # id 確定をブラウザへ
 
         url = self._lookup(frame.id)
         if url is None:
             self._console.print(f"[yellow]→ id={frame.id} は未登録です[/]\n")
             self._reset()
             return
-        self._emit({"type": "url", "url": url})  # 逆引き結果をブラウザへ
+        self._emit({"type": config.WS_EVENT_URL, "url": url})  # 逆引き結果をブラウザへ
 
         self._console.print("URL ", end="")
         self._typewriter(url)
@@ -174,7 +178,7 @@ class Display:
             self._console.print("[dim]→ --no-open: ブラウザは開きません[/]\n")
         else:
             self._console.print("[green]→ ブラウザで開きます[/]\n")
-            self._emit({"type": "open", "url": url})  # オープンをブラウザへ
+            self._emit({"type": config.WS_EVENT_OPEN, "url": url})  # オープンをブラウザへ
             self._opener(url)
         self._reset()
 

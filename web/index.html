@@ -202,7 +202,7 @@
     ctx.globalAlpha=0.25; ctx.strokeStyle="#2a3645"; ctx.lineWidth=1;
     ctx.beginPath(); ctx.moveTo(0,mid); ctx.lineTo(W,mid); ctx.stroke();
     ctx.globalAlpha=1;
-    requestAnimationFrame(draw);
+    if(!reduced) requestAnimationFrame(draw);  // 低モーション設定では静止1フレームに留める
   }
 
   // ---------- sequence helpers ----------
@@ -316,11 +316,17 @@
   buttons.forEach(b=> b.addEventListener("click",()=> run(parseInt(b.dataset.id,10))));
 
   // ---------- WebSocket: Python受信側からのリアルタイム駆動（段1） ----------
-  // `python -m src.main --channel replay --serve` が ws://localhost:8765 で進行イベントを配信する。
+  // `python -m src.main --channel replay --serve` が進行イベントを配信する。
   // 受け取ったイベントで上の演出関数をそのまま駆動する（await の付いた run() ではなく、
   // 実時間で届くイベントに即応する）。ボタン再生は未接続時のデモ・テスト用に残してある。
   const connEl = document.getElementById("conn");
-  const WS_URL = "ws://localhost:8765";
+  // 接続先は既定 ws://localhost:8765。--ws-host / --ws-port を変えた場合は
+  // URL に ?wsHost=… &wsPort=… を付けて開けば合わせられる（https 配信時は wss を使う）。
+  const wsParams = new URLSearchParams(window.location.search);
+  const wsScheme = window.location.protocol === "https:" ? "wss" : "ws";
+  const wsHost = wsParams.get("wsHost") || window.location.hostname || "localhost";
+  const wsPort = wsParams.get("wsPort") || "8765";
+  const WS_URL = `${wsScheme}://${wsHost}:${wsPort}`;
   let ws=null, reconnectTimer=null, blipTimer=null, typeTimer=null;
 
   function setConn(ok){
@@ -338,15 +344,24 @@
   }
 
   // 非ブロッキングのタイプライター（イベント駆動なので run() の await 版は使えない）。
+  // URL はサーバー/lookup 由来の外部入力なので innerHTML は使わず、テキストノードで描く（XSS 防止）。
+  function renderUrl(text, withCaret){
+    if(!withCaret){ urlEl.textContent = text; return; }
+    const caret = document.createElement("span");
+    caret.className = "caret";
+    caret.textContent = "▋";
+    urlEl.replaceChildren(document.createTextNode(text), caret);
+  }
   function typeUrl(url){
     clearInterval(typeTimer);
-    if(reduced){ urlEl.textContent = url; return; }
+    const text = String(url == null ? "" : url);
+    if(reduced){ renderUrl(text, false); return; }
     let i=0;
-    urlEl.innerHTML = '<span class="caret">▋</span>';
+    renderUrl("", true);
     typeTimer = setInterval(()=>{
       i++;
-      urlEl.innerHTML = url.slice(0,i) + '<span class="caret">▋</span>';
-      if(i >= url.length){ clearInterval(typeTimer); urlEl.textContent = url; }
+      renderUrl(text.slice(0,i), true);
+      if(i >= text.length){ clearInterval(typeTimer); renderUrl(text, false); }
     }, 28);
   }
 

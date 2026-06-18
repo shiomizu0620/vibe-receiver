@@ -19,11 +19,14 @@ CLAUDE.md のアーキテクチャ方針との関係:
 """
 import asyncio
 import json
+import logging
 import threading
 
 import websockets
 
 from . import config
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class WsServer:
@@ -45,23 +48,44 @@ class WsServer:
         self._clients: set = set()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
-        self._ready = threading.Event()           # listen 開始（or 失敗）で set
+        self._ready = threading.Event()           # listen 成否が確定したら set
         self._stop_future: asyncio.Future | None = None
+        self._serving = False                     # listen に成功して配信できる状態か
+        self._start_error: Exception | None = None  # listen 失敗の原因（ポート競合など）
+
+    @property
+    def is_serving(self) -> bool:
+        """listen に成功して配信中なら True（呼び出し元の成功表示の判定に使う）。"""
+        return self._serving
+
+    @property
+    def start_error(self) -> Exception | None:
+        """listen 失敗時の例外（成功なら None）。"""
+        return self._start_error
+
+    @property
+    def client_count(self) -> int:
+        """現在接続中のクライアント数。"""
+        return len(self._clients)
 
     # ---- ライフサイクル -------------------------------------------------------
 
-    def start(self, timeout: float = 5.0) -> None:
-        """専用スレッドでイベントループを起動し、listen 開始まで待ってから返す。
+    def start(self, timeout: float = 5.0) -> bool:
+        """専用スレッドでイベントループを起動し、listen 成否が確定するまで待つ。
 
-        listen に至らずタイムアウトしても、受信本体は続行できるよう例外にはしない
-        （ブラウザ配信が無いだけで、ターミナル演出と受信は動く）。
+        戻り値は配信できる状態になったか（True=配信中 / False=起動失敗・タイムアウト）。
+        listen に失敗しても例外にはしない。ブラウザ配信が無いだけで、ターミナル演出と受信は
+        続行できるため、呼び出し元（main）が戻り値を見て案内を出し分けられるようにする。
         """
         if self._thread is not None and self._thread.is_alive():
-            return
+            return self._serving
         self._ready.clear()
+        self._serving = False
+        self._start_error = None
         self._thread = threading.Thread(target=self._run, name="ws-server", daemon=True)
         self._thread.start()
         self._ready.wait(timeout)
+        return self._serving
 
     def _run(self) -> None:
         loop = asyncio.new_event_loop()
@@ -77,10 +101,16 @@ class WsServer:
         self._stop_future = self._loop.create_future()
         try:
             async with websockets.serve(self._handler, self._host, self._port):
-                self._ready.set()            # listen 開始を start() に通知
+                self._serving = True         # listen 成功
+                self._ready.set()            # 成否確定を start() に通知
                 await self._stop_future      # stop() が解決するまで起動し続ける
+        except Exception as exc:             # listen 失敗（ポート競合など）
+            if not self._serving:            # 起動前の失敗だけを start エラーとして記録
+                self._start_error = exc
+                _LOGGER.debug("WebSocket サーバーの起動に失敗", exc_info=True)
         finally:
-            self._ready.set()                # 起動失敗時も start() を解放する
+            self._serving = False
+            self._ready.set()                # 失敗時も start() を解放する
 
     async def _handler(self, websocket, path=None) -> None:
         """1クライアント分の接続。集合に登録し、切断まで保持する。
@@ -93,8 +123,11 @@ class WsServer:
         try:
             async for _ in websocket:
                 pass  # クライアント→サーバー方向は段1では未使用（受け流す）
+        except websockets.ConnectionClosed:
+            pass      # 正常・異常いずれの切断もここで収束（finally で集合から除去）
         except Exception:
-            pass      # 異常切断でハンドラがログを汚さないよう握りつぶす（finally で除去）
+            # 想定外の例外は静かに消さず debug ログに残す（挙動は変えず調査可能にする）。
+            _LOGGER.debug("WebSocket ハンドラで予期しない例外", exc_info=True)
         finally:
             self._clients.discard(websocket)
 
@@ -106,7 +139,9 @@ class WsServer:
             loop.call_soon_threadsafe(lambda: None if fut.done() else fut.set_result(None))
         if self._thread is not None:
             self._thread.join(timeout)
-            self._thread = None
+            # タイムアウトで止まり切らない場合は参照を残し、次回の stop で再 join できるようにする。
+            if not self._thread.is_alive():
+                self._thread = None
 
     # ---- 配信 -----------------------------------------------------------------
 
