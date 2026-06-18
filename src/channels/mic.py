@@ -20,8 +20,9 @@ import threading
 import numpy as np
 import sounddevice as sd
 
+from .. import config
 from ..dsp import bandpass, envelope, to_pulses
-from .base import Channel, OnPulse, PulseEvent
+from .base import Channel, LevelStream, OnLevel, OnPulse, PulseEvent
 
 
 class MicChannel(Channel):
@@ -63,14 +64,14 @@ class MicChannel(Channel):
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
-    def start(self, on_pulse: OnPulse) -> None:
+    def start(self, on_pulse: OnPulse, on_level: OnLevel | None = None) -> None:
         if self._thread is not None and self._thread.is_alive():
             raise RuntimeError("MicChannel is already started")
         self._stop_event.clear()
         self._drain_queue()  # 前回分の残りを捨てて再 start に備える
 
         self._thread = threading.Thread(
-            target=self._run, args=(on_pulse,), daemon=True
+            target=self._run, args=(on_pulse, on_level), daemon=True
         )
         # ストリームを先に開始し、成功してからワーカーを起動する。
         # 途中で例外が出たら確実に後始末してワーカーを孤立させない。
@@ -99,7 +100,7 @@ class MicChannel(Channel):
         # indata は (frames, 1)。バッファは再利用されるので必ず copy する。
         self._q.put(indata[:, 0].copy())
 
-    def _run(self, on_pulse: OnPulse) -> None:
+    def _run(self, on_pulse: OnPulse, on_level: OnLevel | None) -> None:
         fs = self.fs
         guard = int(round(self._GUARD_MS * 1e-3 * fs))
         keep_pad = int(round(self._KEEP_PAD_MS * 1e-3 * fs))
@@ -107,6 +108,12 @@ class MicChannel(Channel):
 
         buf = np.zeros(0, dtype=float)
         base = 0  # buf[0] のストリーム開始からの絶対サンプル index
+
+        # 振幅ストリーム（段2）。floor=閾値スケールにして無音ノイズを 1.0 に誇張しない。
+        # on_level が None なら LevelStream は no-op なので余計な計算は走らない。
+        level = LevelStream(on_level, rate_hz=config.LEVEL_RATE_HZ,
+                            peak_decay=config.LEVEL_PEAK_DECAY, floor=self.threshold)
+        level_last_abs = 0  # ここまでの絶対サンプルは level に反映済み
 
         # stop 後もキューに残った分は処理してから抜ける
         while not (self._stop_event.is_set() and self._q.empty()):
@@ -121,6 +128,14 @@ class MicChannel(Channel):
             pulses = to_pulses(env, fs, self.threshold, self.min_duration_ms)
 
             buf_end = base + len(buf)        # buf の次に来る絶対サンプル
+
+            # 振幅ストリーム: 今サイクルで初めて見た区間の包絡線ピークを 1 個流す
+            # （復号と同じ bandpass→envelope を再利用。LevelStream が 0..1 正規化と間引きを担う）。
+            if on_level is not None:
+                seg_start = max(level_last_abs, base) - base
+                if 0 <= seg_start < len(env):
+                    level.push(float(np.max(env[seg_start:])))
+                level_last_abs = buf_end
             commit_limit = buf_end - guard   # これより前に終わった ON は確定
             pending_start = None             # 末尾に掛かり未確定の ON 開始（絶対）
             last_emit_end = base             # 直近に emit したパルスの終端（絶対）
