@@ -152,7 +152,14 @@ class WsServer:
             return
         message = json.dumps(event)
         # 受信スレッドはここで投げるだけ。実送信はサーバーのイベントループ上で行われる。
-        asyncio.run_coroutine_threadsafe(self._send_all(message), loop)
+        coro = self._send_all(message)
+        try:
+            asyncio.run_coroutine_threadsafe(coro, loop)
+        except RuntimeError:
+            # is_running() 確認後に stop() が loop を閉じた競合。coroutine を閉じて
+            # 「投げるだけ（落とさない）」契約を守る（未 await の警告も防ぐ）。
+            coro.close()
+            _LOGGER.debug("broadcast のスケジュールに失敗（loop 停止）", exc_info=True)
 
     async def _send_all(self, message: str) -> None:
         if not self._clients:

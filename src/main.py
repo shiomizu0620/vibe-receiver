@@ -147,6 +147,7 @@ def main(argv=None) -> None:
     # broadcast を Display.on_event に渡すと、進行イベントがブラウザ演出へも流れる
     # （既存の rich 演出は消さず、配信を「追加」するだけ。受信はブロックしない別スレッド）。
     ws_server = None
+    ws_broadcast = None  # 起動成功時のみ Display に渡す配信フック（失敗時は None＝配信しない）
     display = None
     # サーバー起動後にチャンネル初期化（mic 等）が失敗してもポート/スレッドを確実に解放できるよう、
     # 起動～受信ループ全体を try/finally で囲む。
@@ -155,6 +156,7 @@ def main(argv=None) -> None:
             from src.ws_server import WsServer
             ws_server = WsServer(host=args.ws_host, port=args.ws_port)
             if ws_server.start():
+                ws_broadcast = ws_server.broadcast  # listen 成功時だけ配信を有効化
                 print(f"[main] --serve: WebSocket 配信 ws://{args.ws_host}:{args.ws_port} で待受中",
                       file=sys.stderr)
                 _print_browser_hint(args)
@@ -166,7 +168,7 @@ def main(argv=None) -> None:
                       "ブラウザ配信なしで続行します。", file=sys.stderr)
         # 演出層。lookup は --offline でローカル辞書／既定で Supabase 逆引きを選ぶ（webbrowser は Display が内部で持つ）。
         display = Display(lookup=get_lookup(offline=args.offline), no_open=args.no_open,
-                          on_event=(ws_server.broadcast if ws_server else None))
+                          on_event=ws_broadcast)
         receiver = Receiver(on_frame=display.on_frame)
 
         # チャンネルからの ON パルスを「ライブ演出(on_pulse)」と「復号(receiver.feed)」へ分配する。

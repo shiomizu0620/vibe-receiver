@@ -65,7 +65,7 @@ def test_broadcast_reaches_client():
 def test_broadcast_without_clients_is_safe():
     """クライアント未接続でも broadcast は例外を投げない（受信を止めない契約）。"""
     server = WsServer(host=_HOST, port=_free_port())
-    server.start()
+    assert server.start() is True  # 起動失敗を no-op 経路と取り違えないよう前提を固定
     try:
         server.broadcast({"type": "listening"})  # 誰も居なくても落ちない
     finally:
@@ -76,7 +76,7 @@ def test_stop_is_idempotent():
     """未起動・多重 stop が安全（finally で何度呼ばれても良い）。"""
     server = WsServer(host=_HOST, port=_free_port())
     server.stop()        # 未起動でも安全
-    server.start()
+    assert server.start() is True
     server.stop()
     server.stop()        # 多重でも安全
 
