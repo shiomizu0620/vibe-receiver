@@ -125,6 +125,13 @@ def main(argv=None) -> None:
                     help="URL を表示するだけでブラウザを開かない")
     ap.add_argument("--offline", action="store_true",
                     help="Supabase に繋がずローカル固定辞書で逆引き（会場 Wi-Fi 死亡時のデモ保険）")
+    # WebSocket 配信（段1）: 付けるとブラウザ演出HTMLへ進行イベントをリアルタイム配信する。
+    ap.add_argument("--serve", action="store_true",
+                    help="WebSocket サーバーを起動し、受信進行をブラウザ演出へ配信する")
+    ap.add_argument("--ws-host", type=str, default=config.WS_HOST,
+                    help=f"WebSocket バインドホスト（既定 {config.WS_HOST}）")
+    ap.add_argument("--ws-port", type=int, default=config.WS_PORT,
+                    help=f"WebSocket ポート（既定 {config.WS_PORT}）")
     args = ap.parse_args(argv)
 
     # Windows の既定コンソールが cp932 でも演出の記号で落ちないよう、出力を UTF-8 にしておく。
@@ -136,30 +143,67 @@ def main(argv=None) -> None:
             pass
 
     channel = _build_channel(args)
-    # 演出層。lookup は --offline でローカル辞書／既定で Supabase 逆引きを選ぶ（webbrowser は Display が内部で持つ）。
-    display = Display(lookup=get_lookup(offline=args.offline), no_open=args.no_open)
-    receiver = Receiver(on_frame=display.on_frame)
-
-    # チャンネルからの ON パルスを「ライブ演出(on_pulse)」と「復号(receiver.feed)」へ分配する。
-    # on_pulse を先に呼ぶことで、最後のビット記号が並んだ直後に id 確定表示が続く順序になる。
-    def on_pulse(pulse) -> None:
-        display.on_pulse(pulse)
-        receiver.feed(pulse)
-
-    display.show_header(args.channel)
-    if args.offline:
-        # 逆引き元がローカル辞書であることを明示（オンライン本線と取り違えないように）。
-        print("[main] --offline: ローカル固定辞書で逆引きします（Supabase へは接続しません）",
-              file=sys.stderr)
-    channel.start(on_pulse)
+    # --serve 時のみ WebSocket サーバーを起動（websockets 依存も serve 時のみ要求する）。
+    # broadcast を Display.on_event に渡すと、進行イベントがブラウザ演出へも流れる
+    # （既存の rich 演出は消さず、配信を「追加」するだけ。受信はブロックしない別スレッド）。
+    ws_server = None
+    ws_broadcast = None  # 起動成功時のみ Display に渡す配信フック（失敗時は None＝配信しない）
+    display = None
+    # サーバー起動後にチャンネル初期化（mic 等）が失敗してもポート/スレッドを確実に解放できるよう、
+    # 起動～受信ループ全体を try/finally で囲む。
     try:
+        if args.serve:
+            from src.ws_server import WsServer
+            ws_server = WsServer(host=args.ws_host, port=args.ws_port)
+            if ws_server.start():
+                ws_broadcast = ws_server.broadcast  # listen 成功時だけ配信を有効化
+                print(f"[main] --serve: WebSocket 配信 ws://{args.ws_host}:{args.ws_port} で待受中",
+                      file=sys.stderr)
+                _print_browser_hint(args)
+            else:
+                # listen 失敗（ポート競合など）。ブラウザ配信は無効だが受信・ターミナル演出は続行する。
+                err = ws_server.start_error
+                print(f"[main] --serve: WebSocket サーバーを起動できませんでした"
+                      f"（ws://{args.ws_host}:{args.ws_port}: {err}）。"
+                      "ブラウザ配信なしで続行します。", file=sys.stderr)
+        # 演出層。lookup は --offline でローカル辞書／既定で Supabase 逆引きを選ぶ（webbrowser は Display が内部で持つ）。
+        display = Display(lookup=get_lookup(offline=args.offline), no_open=args.no_open,
+                          on_event=ws_broadcast)
+        receiver = Receiver(on_frame=display.on_frame)
+
+        # チャンネルからの ON パルスを「ライブ演出(on_pulse)」と「復号(receiver.feed)」へ分配する。
+        # on_pulse を先に呼ぶことで、最後のビット記号が並んだ直後に id 確定表示が続く順序になる。
+        def on_pulse(pulse) -> None:
+            display.on_pulse(pulse)
+            receiver.feed(pulse)
+
+        display.show_header(args.channel)
+        if args.offline:
+            # 逆引き元がローカル辞書であることを明示（オンライン本線と取り違えないように）。
+            print("[main] --offline: ローカル固定辞書で逆引きします（Supabase へは接続しません）",
+                  file=sys.stderr)
+        channel.start(on_pulse)
         # 受信ループ: 何メッセージでも待ち受ける。実処理はチャンネルのワーカースレッドが on_pulse 経由で進める。
         while True:
             time.sleep(0.5)
     except KeyboardInterrupt:
-        display.show_footer()
+        if display is not None:
+            display.show_footer()
     finally:
         channel.stop()
+        if ws_server is not None:
+            ws_server.stop()
+
+
+def _print_browser_hint(args) -> None:
+    """ブラウザの開き方を案内する。既定アドレス以外なら接続先をクエリで合わせる方法も示す。"""
+    if args.ws_host == config.WS_HOST and args.ws_port == config.WS_PORT:
+        print("[main] ブラウザで web/index.html を開いてください", file=sys.stderr)
+    else:
+        # web/index.html は既定で localhost:8765 へ繋ぐので、非既定時はクエリで接続先を指定する。
+        print(f"[main] ブラウザで web/index.html を開いてください"
+              f"（接続先を合わせるには ?wsHost={args.ws_host}&wsPort={args.ws_port} を付与）",
+              file=sys.stderr)
 
 
 if __name__ == "__main__":

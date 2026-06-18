@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VibeCode — 受信モニター</title>
+<style>
+  :root{
+    --bg:#0a0e14; --panel:#0f1620; --grid:#16202c; --edge:#1e2a38;
+    --ink:#e8eef5; --mut:#6b7689; --faint:#3d4856;
+    --short:#f5b942;   /* 短い振動 = 0 */
+    --long:#46d6e6;    /* 長い振動 = 1 */
+    --sync:#8fa3b8;    /* プリアンブル */
+    --hot:#ff5d8f;     /* 復号の瞬間 */
+    --mono:ui-monospace,"Cascadia Code","SF Mono","Consolas","Roboto Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--mono);
+    display:flex;flex-direction:column;min-height:100vh;overflow-x:hidden}
+
+  /* top status bar */
+  .bar{display:flex;align-items:center;gap:18px;padding:16px 22px;border-bottom:1px solid var(--edge);flex-wrap:wrap}
+  .brand{font-size:15px;letter-spacing:3px;font-weight:700}
+  .brand .s{color:var(--short)} .brand .l{color:var(--long)}
+  .brand .sub{color:var(--faint);letter-spacing:4px;font-weight:400;font-size:11px;margin-left:6px}
+  .status{margin-left:auto;display:flex;align-items:center;gap:9px;font-size:12.5px;letter-spacing:2px;color:var(--mut)}
+  .led{width:9px;height:9px;border-radius:50%;background:var(--faint);transition:.3s;box-shadow:0 0 0 0 transparent}
+  .led.live{background:var(--long);box-shadow:0 0 12px 2px color-mix(in srgb,var(--long) 70%,transparent);animation:pulse 1.1s infinite}
+  .led.decode{background:var(--hot);box-shadow:0 0 12px 2px color-mix(in srgb,var(--hot) 70%,transparent)}
+  .led.open{background:#54e08a;box-shadow:0 0 12px 2px rgba(84,224,138,.6)}
+  @keyframes pulse{50%{opacity:.35}}
+  /* WebSocket 接続状態（Python受信側 --serve への接続） */
+  .conn{display:inline-flex;align-items:center;gap:6px;font-size:11px;letter-spacing:2px;
+    color:var(--mut);border:1px solid var(--edge);border-radius:7px;padding:4px 9px}
+  .conn::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--faint);transition:.3s}
+  .conn.on{color:#54e08a;border-color:color-mix(in srgb,#54e08a 45%,var(--edge))}
+  .conn.on::before{background:#54e08a;box-shadow:0 0 8px 1px rgba(84,224,138,.6)}
+
+  .stage{flex:1;display:flex;flex-direction:column;justify-content:center;gap:20px;padding:26px 22px 30px;max-width:1100px;width:100%;margin:0 auto}
+
+  /* scope */
+  .scope{position:relative;border:1px solid var(--edge);border-radius:12px;background:
+      linear-gradient(var(--grid) 1px,transparent 1px) 0 0/100% 28px,
+      linear-gradient(90deg,var(--grid) 1px,transparent 1px) 0 0/28px 100%,
+      var(--panel);overflow:hidden}
+  canvas{display:block;width:100%;height:230px}
+  .scope .tag{position:absolute;top:10px;left:14px;font-size:11px;letter-spacing:2px;color:var(--faint)}
+  .scope .reading{position:absolute;top:10px;right:14px;font-size:11px;letter-spacing:2px;color:var(--mut)}
+
+  /* bit row */
+  .bits{display:flex;align-items:center;gap:10px;min-height:54px;flex-wrap:wrap}
+  .bits .lab{font-size:11px;letter-spacing:2px;color:var(--faint);margin-right:4px}
+  .bit{font-size:30px;line-height:1;opacity:0;transform:translateY(8px) scale(.6);
+    transition:transform .25s cubic-bezier(.2,1.4,.4,1),opacity .25s;filter:drop-shadow(0 0 8px currentColor)}
+  .bit.in{opacity:1;transform:translateY(0) scale(1)}
+  .bit.z{color:var(--short)} .bit.o{color:var(--long)}
+  .sep{width:1px;height:26px;background:var(--edge);margin:0 4px}
+  .pre{font-size:13px;letter-spacing:2px;color:var(--sync);opacity:.0;transition:.3s}
+  .pre.in{opacity:.8}
+
+  /* readout */
+  .readout{display:grid;grid-template-columns:1fr;gap:14px}
+  .idline{display:flex;align-items:baseline;gap:16px;min-height:64px}
+  .idline .k{font-size:12px;letter-spacing:3px;color:var(--mut)}
+  .idnum{font-size:60px;font-weight:700;letter-spacing:2px;color:var(--faint);transition:.35s}
+  .idnum.hit{color:var(--hot);text-shadow:0 0 26px color-mix(in srgb,var(--hot) 55%,transparent)}
+  .urlline{font-size:clamp(16px,3.4vw,26px);letter-spacing:1px;color:var(--ink);min-height:34px;word-break:break-all}
+  .urlline .caret{color:var(--long);animation:blink 1s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+  .openrow{min-height:26px;font-size:13px;letter-spacing:2px;color:var(--faint)}
+  .openrow.go{color:#54e08a}
+
+  /* controls */
+  .controls{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding-top:6px}
+  .controls .lab{font-size:11px;letter-spacing:2px;color:var(--faint)}
+  button{font-family:var(--mono);font-size:13px;letter-spacing:1px;color:var(--ink);
+    background:var(--panel);border:1px solid var(--edge);border-radius:8px;padding:10px 16px;cursor:pointer;transition:.15s}
+  button:hover:not(:disabled){border-color:var(--long);color:var(--long)}
+  button:disabled{opacity:.4;cursor:default}
+  button:focus-visible{outline:2px solid var(--long);outline-offset:2px}
+  .legend{margin-left:auto;display:flex;gap:16px;font-size:11.5px;color:var(--mut)}
+  .legend b{font-weight:400}
+  .legend .sw{font-size:16px;vertical-align:-1px}
+  .sw.z{color:var(--short)} .sw.o{color:var(--long)}
+
+  /* flash overlay */
+  #flash{position:fixed;inset:0;background:radial-gradient(circle at 50% 55%,color-mix(in srgb,var(--hot) 40%,transparent),transparent 60%);
+    opacity:0;pointer-events:none;transition:opacity .5s}
+
+  @media (prefers-reduced-motion: reduce){
+    .bit{transition:none} .led{animation:none} .urlline .caret{animation:none}
+  }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <div class="brand"><span class="s">VIBE</span><span class="l">CODE</span><span class="sub">受信モニター</span></div>
+    <div class="status"><span class="led" id="led"></span><span id="statusText">待機中 — 振動を待っています</span></div>
+    <span class="conn" id="conn" title="Python受信側（--serve）への WebSocket 接続状態">未接続</span>
+  </div>
+
+  <div class="stage">
+    <div class="scope">
+      <span class="tag">SIGNAL ／ 振動波形</span>
+      <span class="reading" id="reading">idle</span>
+      <canvas id="scope"></canvas>
+    </div>
+
+    <div class="bits" id="bitsRow">
+      <span class="lab">DECODE</span>
+      <span class="pre" id="pre">⟨ プリアンブル ⟩</span>
+      <span class="sep" id="sep" style="opacity:0"></span>
+      <!-- bits injected here -->
+    </div>
+
+    <div class="readout">
+      <div class="idline">
+        <span class="k">ID</span>
+        <span class="idnum" id="idnum">—</span>
+      </div>
+      <div class="urlline" id="url"></div>
+      <div class="openrow" id="openrow"></div>
+    </div>
+
+    <div class="controls">
+      <span class="lab">送信する番号</span>
+      <button data-id="42">id = 42</button>
+      <button data-id="7">id = 7</button>
+      <button data-id="128">id = 128</button>
+      <span class="legend">
+        <b><span class="sw z">●</span> 短 = 0</b>
+        <b><span class="sw o">━</span> 長 = 1</b>
+      </span>
+    </div>
+  </div>
+
+  <div id="flash"></div>
+
+<script>
+(() => {
+  const URLS = {
+    42:  "https://example.com",
+    7:   "https://www.anthropic.com",
+    128: "https://topaz.dev",
+  };
+  // timing (ms) — PROTOCOL v1.0 準拠（デモ用にやや圧縮）
+  const T = { preOn:600, preOff:200, shortOn:150, longOn:450, gap:150 };
+
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // ---------- oscilloscope ----------
+  const cv = document.getElementById("scope");
+  const ctx = cv.getContext("2d");
+  let W=0,H=0,dpr=1, cols=0, step=2;
+  let amp=[], hue=[];           // ring buffers
+  let head=0;
+  function resize(){
+    dpr = Math.min(devicePixelRatio||1, 2);
+    W = cv.clientWidth; H = cv.clientHeight;
+    cv.width = W*dpr; cv.height = H*dpr;
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    cols = Math.floor(W/step);
+    amp = new Array(cols).fill(0.04);
+    hue = new Array(cols).fill(-1);
+    head = 0;
+  }
+  // current emission state
+  let curAmp = 0.04, curHue = -1;
+  const HUECOL = { "-1":"#243140", "0":getCss("--short"), "1":getCss("--long"), "2":getCss("--sync") };
+  function getCss(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim();}
+
+  let phase=0;
+  function draw(){
+    // push current sample (a couple columns per frame for scroll speed)
+    for(let i=0;i<2;i++){
+      const jitter = (Math.random()-0.5)*0.06;
+      amp[head] = Math.max(0.02, curAmp*(0.82+Math.random()*0.18) + (curAmp>0.2?jitter:jitter*0.3));
+      hue[head] = curHue;
+      head = (head+1)%cols;
+    }
+    ctx.clearRect(0,0,W,H);
+    const mid = H/2;
+    phase += 0.45;
+    // baseline glow
+    for(let x=0;x<cols;x++){
+      const idx = (head + x)%cols;
+      const a = amp[idx];
+      const col = HUECOL[String(hue[idx])] || "#243140";
+      const osc = Math.sin((x*0.5)+phase) ;
+      const y = a * (H*0.40) * osc;
+      const px = x*step;
+      ctx.strokeStyle = col;
+      ctx.globalAlpha = a>0.2 ? 0.9 : 0.5;
+      ctx.lineWidth = a>0.2 ? 2 : 1;
+      ctx.beginPath();
+      ctx.moveTo(px, mid - y);
+      ctx.lineTo(px, mid + y);
+      ctx.stroke();
+    }
+    // center line
+    ctx.globalAlpha=0.25; ctx.strokeStyle="#2a3645"; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(0,mid); ctx.lineTo(W,mid); ctx.stroke();
+    ctx.globalAlpha=1;
+    if(!reduced) requestAnimationFrame(draw);  // 低モーション設定では静止1フレームに留める
+  }
+
+  // ---------- sequence helpers ----------
+  const led=document.getElementById("led");
+  const statusText=document.getElementById("statusText");
+  const reading=document.getElementById("reading");
+  const bitsRow=document.getElementById("bitsRow");
+  const pre=document.getElementById("pre");
+  const sep=document.getElementById("sep");
+  const idnum=document.getElementById("idnum");
+  const urlEl=document.getElementById("url");
+  const openrow=document.getElementById("openrow");
+  const flash=document.getElementById("flash");
+  const buttons=[...document.querySelectorAll("button[data-id]")];
+
+  const sleep = ms => new Promise(r=>setTimeout(r, reduced?Math.min(ms,60):ms));
+  function setState(cls, text){
+    led.className = "led"+(cls?(" "+cls):"");
+    statusText.textContent = text;
+  }
+  function emit(a,h){ curAmp=a; curHue=h; }
+  function idle(){ emit(0.04,-1); reading.textContent="idle"; }
+
+  function clearAll(){
+    [...bitsRow.querySelectorAll(".bit")].forEach(b=>b.remove());
+    pre.classList.remove("in"); sep.style.opacity=0;
+    idnum.textContent="—"; idnum.classList.remove("hit");
+    urlEl.innerHTML=""; openrow.textContent=""; openrow.classList.remove("go");
+    flash.style.opacity=0;
+  }
+
+  function toBits(id){
+    return Array.from({length:8},(_,i)=> (id>>(7-i))&1 );
+  }
+
+  async function pulse(kind){ // 'pre' | 0 | 1
+    const on = kind==='pre'?T.preOn : (kind===1?T.longOn:T.shortOn);
+    const h  = kind==='pre'?2 : (kind===1?1:0);
+    emit(0.92, h);
+    reading.textContent = kind==='pre' ? "SYNC" : (kind===1?"LONG  ▸ 1":"SHORT ▸ 0");
+    await sleep(on);
+    idle();
+    await sleep(T.gap);
+  }
+
+  function addBit(v){
+    const el=document.createElement("span");
+    el.className="bit "+(v?"o":"z");
+    el.textContent = v? "━":"●";
+    bitsRow.appendChild(el);
+    requestAnimationFrame(()=> el.classList.add("in"));
+  }
+
+  let running=false;
+  async function run(id){
+    if(running) return; running=true;
+    buttons.forEach(b=>b.disabled=true);
+    clearAll();
+
+    // 1. listening
+    setState("live","受信中 — プリアンブル検出");
+    pre.classList.add("in");
+    await sleep(reduced?60:500);
+
+    // 2. preamble x2
+    await pulse('pre'); await pulse('pre');
+    sep.style.opacity=1;
+
+    // 3. mode bit (0 = id mode) — 小さくスキップ表示
+    emit(0.92,0); reading.textContent="MODE ▸ 0"; await sleep(T.shortOn); idle(); await sleep(T.gap);
+
+    // 4. 8 data bits, MSB first
+    setState("live","受信中 — データ復調");
+    const bits = toBits(id);
+    for(const b of bits){
+      await pulse(b? 1:0);
+      addBit(b);
+    }
+
+    // 5. decode
+    setState("decode","復元完了");
+    reading.textContent="DECODED";
+    idnum.textContent = id;
+    idnum.classList.add("hit");
+    flash.style.opacity=1; setTimeout(()=>flash.style.opacity=0, 420);
+    await sleep(reduced?60:700);
+
+    // 6. url type
+    const url = URLS[id] || ("https://vibecode.example/"+id);
+    urlEl.innerHTML='<span class="caret">▋</span>';
+    if(reduced){ urlEl.textContent=url; }
+    else {
+      for(let i=0;i<=url.length;i++){
+        urlEl.innerHTML = url.slice(0,i)+'<span class="caret">▋</span>';
+        await sleep(28);
+      }
+      urlEl.textContent=url;
+    }
+
+    // 7. open
+    setState("open","ひらいています");
+    openrow.textContent="→ ブラウザでひらきます"; openrow.classList.add("go");
+    await sleep(900);
+
+    // back to idle
+    setState("","待機中 — 振動を待っています");
+    buttons.forEach(b=>b.disabled=false);
+    running=false;
+  }
+
+  buttons.forEach(b=> b.addEventListener("click",()=> run(parseInt(b.dataset.id,10))));
+
+  // ---------- WebSocket: Python受信側からのリアルタイム駆動（段1） ----------
+  // `python -m src.main --channel replay --serve` が進行イベントを配信する。
+  // 受け取ったイベントで上の演出関数をそのまま駆動する（await の付いた run() ではなく、
+  // 実時間で届くイベントに即応する）。ボタン再生は未接続時のデモ・テスト用に残してある。
+  const connEl = document.getElementById("conn");
+  // 接続先は既定 ws://localhost:8765。--ws-host / --ws-port を変えた場合は
+  // URL に ?wsHost=… &wsPort=… を付けて開けば合わせられる（https 配信時は wss を使う）。
+  const wsParams = new URLSearchParams(window.location.search);
+  const wsScheme = window.location.protocol === "https:" ? "wss" : "ws";
+  const wsHost = wsParams.get("wsHost") || window.location.hostname || "localhost";
+  const wsPort = wsParams.get("wsPort") || "8765";
+  const WS_URL = `${wsScheme}://${wsHost}:${wsPort}`;
+  let ws=null, reconnectTimer=null, blipTimer=null, typeTimer=null;
+
+  function setConn(ok){
+    connEl.textContent = ok ? "接続済み" : "未接続";
+    connEl.classList.toggle("on", ok);
+  }
+
+  // 波形を一瞬振らす: 高振幅を出してすぐ idle へ戻す（scope の draw ループが拾って揺れる）。
+  function blip(kind){ // 'pre' | 0 | 1
+    const h = kind==='pre' ? 2 : (kind===1 ? 1 : 0);
+    emit(0.92, h);
+    reading.textContent = kind==='pre' ? "SYNC" : (kind===1 ? "LONG  ▸ 1" : "SHORT ▸ 0");
+    clearTimeout(blipTimer);
+    blipTimer = setTimeout(idle, kind==='pre' ? 260 : 160);
+  }
+
+  // 非ブロッキングのタイプライター（イベント駆動なので run() の await 版は使えない）。
+  // URL はサーバー/lookup 由来の外部入力なので innerHTML は使わず、テキストノードで描く（XSS 防止）。
+  function renderUrl(text, withCaret){
+    if(!withCaret){ urlEl.textContent = text; return; }
+    const caret = document.createElement("span");
+    caret.className = "caret";
+    caret.textContent = "▋";
+    urlEl.replaceChildren(document.createTextNode(text), caret);
+  }
+  function typeUrl(url){
+    clearInterval(typeTimer);
+    const text = String(url == null ? "" : url);
+    if(reduced){ renderUrl(text, false); return; }
+    let i=0;
+    renderUrl("", true);
+    typeTimer = setInterval(()=>{
+      i++;
+      renderUrl(text.slice(0,i), true);
+      if(i >= text.length){ clearInterval(typeTimer); renderUrl(text, false); }
+    }, 28);
+  }
+
+  // 各イベント → 既存の演出部品を駆動。type をキーに引く。
+  const wsHandlers = {
+    listening(){ clearTimeout(typeTimer); clearAll(); setState("","待機中 — 振動を待っています"); idle(); },
+    preamble(){ clearTimeout(typeTimer); clearAll(); setState("live","受信中 — プリアンブル検出"); pre.classList.add("in"); blip('pre'); },
+    bit(e){ sep.style.opacity=1; addBit(e.value?1:0); blip(e.value?1:0); },
+    decoded(e){
+      setState("decode","復元完了"); reading.textContent="DECODED";
+      idnum.textContent = e.id; idnum.classList.add("hit");
+      flash.style.opacity=1; setTimeout(()=> flash.style.opacity=0, 420);
+    },
+    url(e){ typeUrl(e.url); },
+    open(e){ setState("open","ひらいています"); openrow.textContent="→ ブラウザでひらきます"; openrow.classList.add("go"); idle(); },
+  };
+  function handleEvent(ev){ const h = wsHandlers[ev && ev.type]; if(h) h(ev); }
+
+  function connect(){
+    let sock;
+    try { sock = new WebSocket(WS_URL); }
+    catch(_) { scheduleReconnect(); return; }
+    ws = sock;
+    sock.onopen = ()=> setConn(true);
+    sock.onmessage = (m)=>{ try { handleEvent(JSON.parse(m.data)); } catch(_){} };
+    sock.onclose = ()=>{ setConn(false); scheduleReconnect(); };   // 切れたら自動再接続
+    sock.onerror = ()=>{ try { sock.close(); } catch(_){} };       // close 経由で再接続へ
+  }
+  function scheduleReconnect(){
+    clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(connect, 1500);
+  }
+
+  // boot
+  window.addEventListener("resize", ()=>{const r=running; resize();});
+  resize(); idle();
+  if(!reduced) requestAnimationFrame(draw); else { /* draw one static frame */ draw(); }
+  connect();   // ページを開いたら受信側への接続を試みる（未起動なら自動再接続で待つ）
+})();
+</script>
+</body>
+</html>

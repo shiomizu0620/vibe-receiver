@@ -24,6 +24,20 @@ FRAME_PULSES = PREAMBLE_REPEAT + 1 + ID_BITS  # 1フレームのONパルス数: 
 MAX_BUFFER_FRAMES = 2        # バッファ上限をフレーム何個分まで許すか（ノイズで無限に伸びるのを防ぐ）
 FRAME_GAP_MULTIPLIER = 3     # 連続受信時のフレーム境界ギャップを GAP_MS の何倍空けるか
 
+# WebSocket 配信（段1）。ブラウザ演出HTMLへ進行イベントをリアルタイム配信する既定アドレス。
+# 受信処理はブロックしない（専用スレッドのイベントループで配信。詳細は ws_server.py）。
+WS_HOST = "localhost"
+WS_PORT = 8765
+
+# 配信イベントの type 値。ブラウザ側 handler と一致しないと演出が無音で止まる契約値なので、
+# Python 側は文字列直書きを避けてここに集約する（タイプミス・将来追加時のズレ防止）。
+WS_EVENT_LISTENING = "listening"  # 待機開始
+WS_EVENT_PREAMBLE = "preamble"    # プリアンブル検出
+WS_EVENT_BIT = "bit"              # データビット確定（value: 0|1, MSB first）
+WS_EVENT_DECODED = "decoded"      # id 確定（id: int）
+WS_EVENT_URL = "url"              # 逆引き結果（url: str）
+WS_EVENT_OPEN = "open"            # オープン（url: str）
+
 # Supabase 逆引き設定（R9）。テーブル / 列名（id を引いて url を得る逆引き）。
 SUPABASE_TABLE = "urls"
 SUPABASE_ID_COLUMN = "id"
