@@ -63,17 +63,30 @@ class Display:
 
     def __init__(self, console: Console | None = None, lookup=lookup_url,
                  opener=webbrowser.open, no_open: bool = False,
-                 typing_speed: float = 0.025):
+                 typing_speed: float = 0.025, on_event=None):
         # console を注入できるようにして、テストでは StringIO に流して出力を検証する。
         self._console = console if console is not None else Console()
         self._lookup = lookup          # id -> url | None（R9 で Supabase 実装に差し替わる）
         self._opener = opener          # url を開く callable（既定 webbrowser.open）
         self._no_open = no_open        # True なら URL 表示のみでブラウザは開かない
         self._typing_speed = typing_speed  # タイプライターの1文字あたり秒（テストは0で即時）
+        # 進行イベントの追加配信フック（段1: ブラウザ演出へ WebSocket 送信）。
+        # 既定 None なら何もせず、従来どおりターミナル演出だけが動く。dict を1個ずつ渡す。
+        # main が --serve 時に WsServer.broadcast を結線する（display は WS を知らない）。
+        self._on_event = on_event
         # ライブ演出の状態（1フレーム分）。on_pulse 間で持ち越す軽量ステートマシン。
         self._preamble_run = 0   # 連続して見えたプリアンブル級 ON の数
         self._in_frame = False   # プリアンブル検出後＝フレーム本体を読んでいる最中か
         self._pulse_in_frame = 0  # プリアンブル後に届いたパルス数（1個目=モードマーカー）
+
+    def _emit(self, event: dict) -> None:
+        """進行イベントを追加フックへ流す（未設定なら何もしない）。配信失敗で演出を止めない。"""
+        if self._on_event is None:
+            return
+        try:
+            self._on_event(event)
+        except Exception:
+            pass  # ブラウザ配信の不調でターミナル演出・受信を巻き込まない
 
     # ---- 起動/終了の飾り（main から呼ぶ） -------------------------------------
 
@@ -83,6 +96,7 @@ class Display:
             f"[bold]バイブコード受信[/]  channel=[cyan]{channel_name}[/]\n"
             "[dim]Ctrl+C で終了[/]",
             title="待機中", border_style="green", box=_BOX))
+        self._emit({"type": "listening"})  # 待機開始をブラウザへ
 
     def show_footer(self) -> None:
         """終了メッセージ。"""
@@ -113,6 +127,8 @@ class Display:
             bit = kind_to_bit(kind)
             self._console.print(Text(glyph_for_bit(bit) + " ",
                                      style=_BIT_STYLE[bit]), end="")
+            # データビット確定（モードマーカーは除く・MSB first で1個ずつ）をブラウザへ。
+            self._emit({"type": "bit", "value": bit})
 
     def _start_frame(self) -> None:
         """プリアンブル検出 → 「受信開始」表示してビット行の描画を始める。"""
@@ -123,6 +139,7 @@ class Display:
                                        "[dim]プリアンブル検出[/]",
                                        border_style="green", box=_BOX))
         self._console.print("  ", end="")  # ビット行のインデント
+        self._emit({"type": "preamble"})   # プリアンブル検出をブラウザへ
 
     # ---- フレーム確定ごとの演出 -----------------------------------------------
 
@@ -141,12 +158,14 @@ class Display:
         self._console.print(Panel.fit(
             f"id = [bold white]{frame.id}[/]\n[dim]bits[/] {glyphs}",
             title="復元", border_style="cyan", box=_BOX))
+        self._emit({"type": "decoded", "id": frame.id})  # id 確定をブラウザへ
 
         url = self._lookup(frame.id)
         if url is None:
             self._console.print(f"[yellow]→ id={frame.id} は未登録です[/]\n")
             self._reset()
             return
+        self._emit({"type": "url", "url": url})  # 逆引き結果をブラウザへ
 
         self._console.print("URL ", end="")
         self._typewriter(url)
@@ -155,6 +174,7 @@ class Display:
             self._console.print("[dim]→ --no-open: ブラウザは開きません[/]\n")
         else:
             self._console.print("[green]→ ブラウザで開きます[/]\n")
+            self._emit({"type": "open", "url": url})  # オープンをブラウザへ
             self._opener(url)
         self._reset()
 

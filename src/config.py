@@ -24,6 +24,11 @@ FRAME_PULSES = PREAMBLE_REPEAT + 1 + ID_BITS  # 1フレームのONパルス数: 
 MAX_BUFFER_FRAMES = 2        # バッファ上限をフレーム何個分まで許すか（ノイズで無限に伸びるのを防ぐ）
 FRAME_GAP_MULTIPLIER = 3     # 連続受信時のフレーム境界ギャップを GAP_MS の何倍空けるか
 
+# WebSocket 配信（段1）。ブラウザ演出HTMLへ進行イベントをリアルタイム配信する既定アドレス。
+# 受信処理はブロックしない（専用スレッドのイベントループで配信。詳細は ws_server.py）。
+WS_HOST = "localhost"
+WS_PORT = 8765
+
 # Supabase 逆引き設定（R9）。テーブル / 列名（id を引いて url を得る逆引き）。
 SUPABASE_TABLE = "urls"
 SUPABASE_ID_COLUMN = "id"

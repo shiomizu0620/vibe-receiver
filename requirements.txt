@@ -9,5 +9,7 @@ rich
 # Supabase 逆引き（R9）と .env 読み込み
 supabase
 python-dotenv
+# ブラウザ演出HTMLへの WebSocket 配信（--serve 使用時。段1）
+websockets
 # マイク入力（mic チャンネル使用時のみ。CI/テストでは不要）
 sounddevice

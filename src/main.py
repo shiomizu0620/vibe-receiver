@@ -125,6 +125,13 @@ def main(argv=None) -> None:
                     help="URL を表示するだけでブラウザを開かない")
     ap.add_argument("--offline", action="store_true",
                     help="Supabase に繋がずローカル固定辞書で逆引き（会場 Wi-Fi 死亡時のデモ保険）")
+    # WebSocket 配信（段1）: 付けるとブラウザ演出HTMLへ進行イベントをリアルタイム配信する。
+    ap.add_argument("--serve", action="store_true",
+                    help="WebSocket サーバーを起動し、受信進行をブラウザ演出へ配信する")
+    ap.add_argument("--ws-host", type=str, default=config.WS_HOST,
+                    help=f"WebSocket バインドホスト（既定 {config.WS_HOST}）")
+    ap.add_argument("--ws-port", type=int, default=config.WS_PORT,
+                    help=f"WebSocket ポート（既定 {config.WS_PORT}）")
     args = ap.parse_args(argv)
 
     # Windows の既定コンソールが cp932 でも演出の記号で落ちないよう、出力を UTF-8 にしておく。
@@ -136,8 +143,19 @@ def main(argv=None) -> None:
             pass
 
     channel = _build_channel(args)
+    # --serve 時のみ WebSocket サーバーを起動（websockets 依存も serve 時のみ要求する）。
+    # broadcast を Display.on_event に渡すと、進行イベントがブラウザ演出へも流れる
+    # （既存の rich 演出は消さず、配信を「追加」するだけ。受信はブロックしない別スレッド）。
+    ws_server = None
+    if args.serve:
+        from src.ws_server import WsServer
+        ws_server = WsServer(host=args.ws_host, port=args.ws_port)
+        ws_server.start()
+        print(f"[main] --serve: WebSocket 配信 ws://{args.ws_host}:{args.ws_port} "
+              "（ブラウザで web/index.html を開いてください）", file=sys.stderr)
     # 演出層。lookup は --offline でローカル辞書／既定で Supabase 逆引きを選ぶ（webbrowser は Display が内部で持つ）。
-    display = Display(lookup=get_lookup(offline=args.offline), no_open=args.no_open)
+    display = Display(lookup=get_lookup(offline=args.offline), no_open=args.no_open,
+                      on_event=(ws_server.broadcast if ws_server else None))
     receiver = Receiver(on_frame=display.on_frame)
 
     # チャンネルからの ON パルスを「ライブ演出(on_pulse)」と「復号(receiver.feed)」へ分配する。
@@ -160,6 +178,8 @@ def main(argv=None) -> None:
         display.show_footer()
     finally:
         channel.stop()
+        if ws_server is not None:
+            ws_server.stop()
 
 
 if __name__ == "__main__":
