@@ -19,14 +19,16 @@ import time
 # `python src/main.py` 直叩きでも src.* を解決できるようにリポジトリ root を通す（debug_view.py と同じ）
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from src import config
+from src import config, x1
 from src.channels import ReplayChannel
 from src.decode import DecodeError, decode_pulses
 from src.display import Display
 from src.lookup import get_lookup
 
 # バッファ上限: フレーム未完が続いてもノイズで無限に伸びないよう、末尾だけ残してトリムする閾値（定数は config）。
-_MAX_BUFFER_PULSES = config.MAX_BUFFER_FRAMES * config.FRAME_PULSES
+# X1（可変長・最大63文字）は id フレームよりずっと長いので、最長 X1 フレームを収容できる値にする
+# （短すぎると長い X1 を形成中にプリアンブルごと末尾トリムで捨ててしまい復号できない）。
+_MAX_BUFFER_PULSES = config.MAX_BUFFER_FRAMES * config.X1_MAX_FRAME_PULSES
 
 
 class Receiver:
@@ -87,6 +89,31 @@ def build_frame_pulses(ids, t0=0.0, frame_gap_ms=None):
     return pulses
 
 
+def build_x1_frame_pulses(url, t0=0.0, corrupt_bits=0):
+    """URL から X1（marker=1）replay 用パルス列を生成する（デモ・テスト用）。
+
+    送信側（X1-send）はまだ無いので、受信デコーダを単体で通すための参照エンコードを兼ねる。
+    並びは build_frame_pulses と同じ: プリアンブル×2 → marker(long=1) → scheme+length+chars+checksum。
+    corrupt_bits>0 で chars 以降のビットを指定本数だけ反転し、わざと checksum NG を起こす
+    （length は壊さないので decode は正しい長さで本体を読み、checksum だけが食い違う＝運命サイト発動）。
+    """
+    bits = [config.MODE_DIRECT] + x1.encode_x1_bits(url)  # 先頭にモードマーカー(=1)を付ける
+    if corrupt_bits:
+        flip_start = 1 + config.X1_SCHEME_BITS + config.X1_LENGTH_BITS  # chars 領域の先頭
+        for i in range(flip_start, min(flip_start + corrupt_bits, len(bits))):
+            bits[i] ^= 1
+    pulses: list[tuple[float, float]] = []
+    t = float(t0)
+    for _ in range(config.PREAMBLE_REPEAT):
+        pulses.append((t, float(config.PREAMBLE_ON_MS)))
+        t += config.PREAMBLE_ON_MS + config.PREAMBLE_OFF_MS
+    for bit in bits:
+        dur = float(config.LONG_MS if bit else config.SHORT_MS)
+        pulses.append((t, dur))
+        t += dur + config.GAP_MS
+    return pulses
+
+
 def _parse_ids(spec: str) -> list[int]:
     """'42,7' のようなカンマ区切り文字列を id のリストに変換する。"""
     return [int(part) for part in spec.split(",") if part.strip() != ""]
@@ -95,7 +122,11 @@ def _parse_ids(spec: str) -> list[int]:
 def _build_channel(args):
     """--channel と各オプションから Channel を組み立てて返す。"""
     if args.channel == "replay":
-        pulses = build_frame_pulses(_parse_ids(args.ids))
+        if args.x1_url:
+            # X1（URL直接モード）を流す。--x1-corrupt N で checksum NG を意図的に作れる（運命サイトのデモ）。
+            pulses = build_x1_frame_pulses(args.x1_url, corrupt_bits=args.x1_corrupt)
+        else:
+            pulses = build_frame_pulses(_parse_ids(args.ids))
         return ReplayChannel(pulses, speed=args.speed)
     # mic: sounddevice 依存は mic 選択時のみ要求する（replay/テストでは読み込まない）
     from src.channels.mic import MicChannel
@@ -112,6 +143,10 @@ def main(argv=None) -> None:
     # replay 用
     ap.add_argument("--ids", type=str, default="42,7",
                     help="replay で流す id 列（カンマ区切り。連続受信の実証用に既定で2件）")
+    ap.add_argument("--x1-url", type=str, default=None,
+                    help="replay で X1（URL直接モード）を流す短URL（例 github.com）。指定時は --ids より優先")
+    ap.add_argument("--x1-corrupt", type=int, default=0, metavar="N",
+                    help="X1 フレームの本体ビットを N 本反転して checksum NG を起こす（運命サイトのデモ用）")
     ap.add_argument("--speed", type=float, default=1.0,
                     help="replay の再生速度（1.0=実時間, 0=即時, >1=早送り）")
     # mic 用（既定値は MicChannel / debug_view に合わせた仮値。確定は R8）

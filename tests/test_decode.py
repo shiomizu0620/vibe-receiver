@@ -2,6 +2,7 @@
 import pytest
 from src.decode import decode_pulses, DecodeError
 from src import config
+from src.main import build_x1_frame_pulses
 
 
 def make_pulses(bits, jitter=None):
@@ -43,3 +44,44 @@ def test_incomplete_frame_raises():
     pulses = make_pulses([0, 1, 0])[: 2 + 1 + 3]  # 3bitで途切れ
     with pytest.raises(DecodeError):
         decode_pulses(pulses)
+
+
+# ---- X1（URL直接モード・marker=1）-------------------------------------------
+
+def test_decode_x1_ok():
+    """正しい X1 フレーム → checksum OK で URL が復元される。"""
+    frame = decode_pulses(build_x1_frame_pulses("github.com"))
+    assert frame.mode == config.MODE_DIRECT
+    assert frame.checksum_ok is True
+    assert frame.url == "https://github.com"
+    assert frame.id is None  # id モードのフィールドは埋まらない
+
+
+def test_decode_x1_http_scheme():
+    """scheme=1（http）の X1 フレームも復元できる。"""
+    frame = decode_pulses(build_x1_frame_pulses("http://a.io/x?q=1"))
+    assert frame.checksum_ok is True
+    assert frame.scheme == "http"
+    assert frame.url == "http://a.io/x?q=1"
+
+
+def test_decode_x1_corrupted_checksum_ng():
+    """本体ビットを数本反転 → checksum NG（復号自体は成功し Frame は返る）。"""
+    frame = decode_pulses(build_x1_frame_pulses("github.com", corrupt_bits=3))
+    assert frame.mode == config.MODE_DIRECT
+    assert frame.checksum_ok is False
+    assert frame.url is None
+    assert frame.body is not None  # 参考表示用に本体は復元されている
+
+
+def test_decode_x1_incomplete_waits():
+    """X1 フレームが途中までしか無ければ DecodeError（受信ループは未完として待つ）。"""
+    pulses = build_x1_frame_pulses("github.com")
+    with pytest.raises(DecodeError):
+        decode_pulses(pulses[:6])  # プリアンブル+数パルスのみ
+
+
+def test_id_mode_unchanged_alongside_x1():
+    """X1 追加後も marker=0（idモード）の復号は従来どおり（回帰なし）。"""
+    bits = [0, 0, 1, 0, 1, 0, 1, 0]  # 42
+    assert decode_pulses(make_pulses(bits)).id == 42

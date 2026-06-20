@@ -24,6 +24,53 @@ FRAME_PULSES = PREAMBLE_REPEAT + 1 + ID_BITS  # 1フレームのONパルス数: 
 MAX_BUFFER_FRAMES = 2        # バッファ上限をフレーム何個分まで許すか（ノイズで無限に伸びるのを防ぐ）
 FRAME_GAP_MULTIPLIER = 3     # 連続受信時のフレーム境界ギャップを GAP_MS の何倍空けるか
 
+# ─────────────────────────────────────────────────────────────────────────
+# X1: URL直接符号化モード（PROTOCOL v1.1 / モードマーカー=MODE_DIRECT=1）
+# フレーム（MSB first）: [プリアンブル×2] [marker=1] [scheme 1] [length 6] [chars length×6] [checksum 8]
+#   marker=1 … URL直接モード（marker=0=従来idモードは無変更）
+#   scheme  … 0=https / 1=http
+#   length  … 文字数（最大 X1_MAX_LENGTH。X1 は短URL専用）
+#   chars   … 1文字=6bit。X1_CHAR_TABLE のインデックス
+#   checksum… 本体(chars)に対する CRC-8（poly 0x07・検出のみ。詳細は src/x1.py）
+# 仕様確定時はここを起点に PROTOCOL.md v1.1 へ反映する（単独変更はしない＝3人合意）。
+# ─────────────────────────────────────────────────────────────────────────
+X1_SCHEME_BITS = 1       # scheme フィールド幅
+X1_LENGTH_BITS = 6       # length フィールド幅（→ 最大 63 文字）
+X1_CHAR_BITS = 6         # 1文字あたりのビット数（64種テーブル）
+X1_CHECKSUM_BITS = 8     # CRC-8
+X1_MAX_LENGTH = (1 << X1_LENGTH_BITS) - 1  # length の最大（63）
+X1_SCHEMES = {0: "https", 1: "http"}       # scheme ビット → URL スキーム
+X1_CRC_POLY = 0x07       # CRC-8 多項式（init=0x00, 反転なし, 最終XORなし）
+
+# 6bit 文字テーブル（送受信で完全一致させる）。リスト添字＝送るシンボル値（インデックス）。
+#   idx 0–25  = a–z
+#   idx 26–35 = 0–9
+#   idx 36–58 = 記号23種（この順）
+#   idx 59–63 = 予約（None）
+X1_CHAR_TABLE = (
+    [chr(ord("a") + i) for i in range(26)]            # 0–25: a–z
+    + [chr(ord("0") + i) for i in range(10)]          # 26–35: 0–9
+    + list(".-_~:/?#[]@!$&'()*+,;=%")                  # 36–58: 記号23種
+    + [None] * 5                                       # 59–63: 予約
+)
+
+# X1 フレームの最大 ON パルス数（length 最大時）。main のバッファ上限算出に使う。
+X1_MAX_FRAME_PULSES = (
+    PREAMBLE_REPEAT + 1 + X1_SCHEME_BITS + X1_LENGTH_BITS
+    + X1_CHAR_BITS * X1_MAX_LENGTH + X1_CHECKSUM_BITS
+)
+
+# checksum NG（人間演奏のミス等）時に開く「運命のサイト🎲」既定リスト。
+# 安全・無害な定番サイトのみ。チームで自由に差し替え可（本番デモ前に各自で開いて確認すること）。
+FUN_SITES = [
+    "https://ja.wikipedia.org/wiki/Special:Random",  # ランダムなウィキ記事
+    "https://hacker-typer.com/",                      # それっぽいハッカー画面
+    "https://pointerpointer.com/",                    # 指差し職人
+    "https://theuselessweb.com/",                     # 無意味サイトへ転送
+    "https://cat-bounce.com/",                        # 跳ねる猫
+    "https://www.windows93.net/",                     # ネタOS風デスクトップ
+]
+
 # WebSocket 配信（段1）。ブラウザ演出HTMLへ進行イベントをリアルタイム配信する既定アドレス。
 # 受信処理はブロックしない（専用スレッドのイベントループで配信。詳細は ws_server.py）。
 WS_HOST = "localhost"

@@ -15,6 +15,7 @@
   ライブ行はチャンネルから届く「生のパルス」を順に描くだけの飾りで、id の真値は必ず decode（on_frame の Frame）に従う。
 """
 import logging
+import random
 import time
 import webbrowser
 
@@ -66,13 +67,17 @@ class Display:
 
     def __init__(self, console: Console | None = None, lookup=lookup_url,
                  opener=webbrowser.open, no_open: bool = False,
-                 typing_speed: float = 0.025, on_event=None):
+                 typing_speed: float = 0.025, on_event=None,
+                 fun_sites=None, fun_picker=random.choice):
         # console を注入できるようにして、テストでは StringIO に流して出力を検証する。
         self._console = console if console is not None else Console()
         self._lookup = lookup          # id -> url | None（R9 で Supabase 実装に差し替わる）
         self._opener = opener          # url を開く callable（既定 webbrowser.open）
         self._no_open = no_open        # True なら URL 表示のみでブラウザは開かない
         self._typing_speed = typing_speed  # タイプライターの1文字あたり秒（テストは0で即時）
+        # X1 の checksum NG 時に開く「運命のサイト🎲」候補と選び方。テストで決定的に差し替えられるよう注入する。
+        self._fun_sites = list(fun_sites) if fun_sites is not None else list(config.FUN_SITES)
+        self._fun_picker = fun_picker  # シーケンスから1つ選ぶ callable（既定 random.choice）
         # 進行イベントの追加配信フック（段1: ブラウザ演出へ WebSocket 送信）。
         # 既定 None なら何もせず、従来どおりターミナル演出だけが動く。dict を1個ずつ渡す。
         # main が --serve 時に WsServer.broadcast を結線する（display は WS を知らない）。
@@ -148,16 +153,21 @@ class Display:
     # ---- フレーム確定ごとの演出 -----------------------------------------------
 
     def on_frame(self, frame) -> None:
-        """1フレーム確定時に呼ばれる。id を表示し、URL を解決してタイプライター演出→オープン。"""
+        """1フレーム確定時に呼ばれる。モードに応じて id 方式 / X1（URL直接）の演出に振り分ける。"""
         self._console.print()  # ライブ行を閉じる
-        if frame.id is None:
-            # モードマーカー=1（直接符号化・stretch）。R7 では id モードのみ演出する。
+        if frame.mode == config.MODE_ID and frame.id is not None:
+            self._on_id_frame(frame)
+        elif frame.mode == config.MODE_DIRECT:
+            self._on_x1_frame(frame)
+        else:
+            # 将来拡張のモード。演出だけして開かない。
             self._console.print(Panel.fit(
-                f"mode={frame.mode}（id モード以外・未対応）",
+                f"mode={frame.mode}（未対応のモード）",
                 border_style="yellow", box=_BOX))
-            self._reset()
-            return
+        self._reset()
 
+    def _on_id_frame(self, frame) -> None:
+        """marker=0（idモード）: id を表示 → lookup → URL をオープン（従来挙動）。"""
         glyphs = bits_to_glyphs(frame.payload_bits)
         self._console.print(Panel.fit(
             f"id = [bold white]{frame.id}[/]\n[dim]bits[/] {glyphs}",
@@ -167,11 +177,32 @@ class Display:
         url = self._lookup(frame.id)
         if url is None:
             self._console.print(f"[yellow]→ id={frame.id} は未登録です[/]\n")
-            self._reset()
             return
-        self._emit({"type": config.WS_EVENT_URL, "url": url})  # 逆引き結果をブラウザへ
+        self._present_url(url)
 
-        self._console.print("URL ", end="")
+    def _on_x1_frame(self, frame) -> None:
+        """marker=1（X1）: checksum OK なら復元 URL を、NG なら運命のサイトを開く（方針b）。"""
+        if frame.checksum_ok:
+            self._console.print(Panel.fit(
+                f"[bold white]URL 直接受信（X1）[/]\n[dim]checksum OK[/]  scheme={frame.scheme}",
+                title="復元", border_style="cyan", box=_BOX))
+            self._present_url(frame.url)
+            return
+        # checksum NG（人間演奏のミス・誤り注入など）→ 運命のサイト🎲
+        self._console.print(Panel.fit(
+            "[bold yellow]ミスったので運命のサイトへ🎲[/]\n"
+            f"[dim]checksum NG（受信本体: {frame.body!r}）[/]",
+            title="X1 失敗", border_style="yellow", box=_BOX))
+        if not self._fun_sites:
+            self._console.print("[yellow]→ 運命のサイトが未設定です[/]\n")
+            return
+        site = self._fun_picker(self._fun_sites)
+        self._present_url(site, label="運命 ")
+
+    def _present_url(self, url: str, label: str = "URL ") -> None:
+        """url を typewriter で出し、--no-open でなければ開く。WS にも url/open を流す（共通処理）。"""
+        self._emit({"type": config.WS_EVENT_URL, "url": url})  # 結果 URL をブラウザへ
+        self._console.print(label, end="")
         self._typewriter(url)
         self._console.print()
         if self._no_open:
@@ -180,7 +211,6 @@ class Display:
             self._console.print("[green]→ ブラウザで開きます[/]\n")
             self._emit({"type": config.WS_EVENT_OPEN, "url": url})  # オープンをブラウザへ
             self._opener(url)
-        self._reset()
 
     def _typewriter(self, text: str) -> None:
         """文字列を1文字ずつ出す。URL を「打ち込んでいる」風に見せる。"""
