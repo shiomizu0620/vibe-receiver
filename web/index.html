@@ -167,6 +167,7 @@
   }
   // current emission state
   let curAmp = 0.04, curHue = -1;
+  let lastHue = -1;   // 直近の bit/プリアンブル種別（level 受信時の波形色に使う・段2）
   const HUECOL = { "-1":"#243140", "0":getCss("--short"), "1":getCss("--long"), "2":getCss("--sync") };
   function getCss(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim();}
 
@@ -327,20 +328,11 @@
   const wsHost = wsParams.get("wsHost") || window.location.hostname || "localhost";
   const wsPort = wsParams.get("wsPort") || "8765";
   const WS_URL = `${wsScheme}://${wsHost}:${wsPort}`;
-  let ws=null, reconnectTimer=null, blipTimer=null, typeTimer=null;
+  let ws=null, reconnectTimer=null, typeTimer=null;
 
   function setConn(ok){
     connEl.textContent = ok ? "接続済み" : "未接続";
     connEl.classList.toggle("on", ok);
-  }
-
-  // 波形を一瞬振らす: 高振幅を出してすぐ idle へ戻す（scope の draw ループが拾って揺れる）。
-  function blip(kind){ // 'pre' | 0 | 1
-    const h = kind==='pre' ? 2 : (kind===1 ? 1 : 0);
-    emit(0.92, h);
-    reading.textContent = kind==='pre' ? "SYNC" : (kind===1 ? "LONG  ▸ 1" : "SHORT ▸ 0");
-    clearTimeout(blipTimer);
-    blipTimer = setTimeout(idle, kind==='pre' ? 260 : 160);
   }
 
   // 非ブロッキングのタイプライター（イベント駆動なので run() の await 版は使えない）。
@@ -366,10 +358,19 @@
   }
 
   // 各イベント → 既存の演出部品を駆動。type をキーに引く。
+  // 段2: 波形の振幅は自前アニメではなく level イベントで駆動する。bit/preamble は色（種別）
+  // と DECODE 表示だけ受け持ち、振幅は level に任せる（接続中は受信の包絡線で波形が動く）。
   const wsHandlers = {
-    listening(){ clearTimeout(typeTimer); clearAll(); setState("","待機中 — 振動を待っています"); idle(); },
-    preamble(){ clearTimeout(typeTimer); clearAll(); setState("live","受信中 — プリアンブル検出"); pre.classList.add("in"); blip('pre'); },
-    bit(e){ sep.style.opacity=1; addBit(e.value?1:0); blip(e.value?1:0); },
+    listening(){ clearTimeout(typeTimer); clearAll(); setState("","待機中 — 振動を待っています"); lastHue=-1; idle(); },
+    preamble(){ clearTimeout(typeTimer); clearAll(); setState("live","受信中 — プリアンブル検出"); pre.classList.add("in"); lastHue=2; curHue=2; reading.textContent="SYNC"; },
+    bit(e){ const b=e.value?1:0; sep.style.opacity=1; addBit(b); lastHue=b; curHue=b; reading.textContent = b?"LONG  ▸ 1":"SHORT ▸ 0"; },
+    level(e){
+      let v = Number(e.v);
+      if(!isFinite(v)) v = 0;
+      curAmp = Math.max(0.04, Math.min(1, v));  // 受信レベルで波形の振幅を駆動
+      curHue = lastHue;                          // 色は直近の bit（短=アンバー/長=シアン）に合わせる
+      if(reduced) draw();                        // 低モーション時は rAF が回らないので1枚だけ描く
+    },
     decoded(e){
       setState("decode","復元完了"); reading.textContent="DECODED";
       idnum.textContent = e.id; idnum.classList.add("hit");
@@ -387,7 +388,7 @@
     ws = sock;
     sock.onopen = ()=> setConn(true);
     sock.onmessage = (m)=>{ try { handleEvent(JSON.parse(m.data)); } catch(_){} };
-    sock.onclose = ()=>{ setConn(false); scheduleReconnect(); };   // 切れたら自動再接続
+    sock.onclose = ()=>{ setConn(false); lastHue=-1; idle(); scheduleReconnect(); };  // 切れたら波形を静め自動再接続
     sock.onerror = ()=>{ try { sock.close(); } catch(_){} };       // close 経由で再接続へ
   }
   function scheduleReconnect(){

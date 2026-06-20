@@ -216,12 +216,20 @@ def main(argv=None) -> None:
             display.on_pulse(pulse)
             receiver.feed(pulse)
 
+        # 振幅ストリーム（段2）: --serve 成功時だけ level イベントをブラウザへ配信する。
+        # チャンネル側で 0..1 正規化・間引き済みの値が届くので、ここは JSON に包んで投げるだけ。
+        # 配信が無効（None）ならチャンネルは level を一切計算しない。
+        on_level = None
+        if ws_broadcast is not None:
+            def on_level(v) -> None:
+                ws_broadcast({"type": config.WS_EVENT_LEVEL, "v": round(float(v), 3)})
+
         display.show_header(args.channel)
         if args.offline:
             # 逆引き元がローカル辞書であることを明示（オンライン本線と取り違えないように）。
             print("[main] --offline: ローカル固定辞書で逆引きします（Supabase へは接続しません）",
                   file=sys.stderr)
-        channel.start(on_pulse)
+        channel.start(on_pulse, on_level=on_level)
         # 受信ループ: 何メッセージでも待ち受ける。実処理はチャンネルのワーカースレッドが on_pulse 経由で進める。
         while True:
             time.sleep(0.5)

@@ -92,6 +92,13 @@ WS_EVENT_BIT = "bit"              # データビット確定（value: 0|1, MSB f
 WS_EVENT_DECODED = "decoded"      # id 確定（id: int）
 WS_EVENT_URL = "url"              # 逆引き結果（url: str）
 WS_EVENT_OPEN = "open"            # オープン（url: str）
+WS_EVENT_LEVEL = "level"          # 受信中の振幅（v: 0.0〜1.0。包絡線をオシロスコープへ・段2）
+
+# level 配信（段2）。受信チャンネルの包絡線を 0..1 に正規化してブラウザの波形を駆動する。
+# 連続値なので「毎フレーム送らず」目標レート以下に間引く（送りすぎ防止。30〜60Hzの中庸を採る）。
+LEVEL_RATE_HZ = 40.0      # level イベントの目標配信レート（1/この秒数より速くは送らない）
+LEVEL_PEAK_DECAY = 0.9    # 自動ゲインの走行ピークの減衰率（1 emit ごと。大きいほど余韻が長い）
+LEVEL_DEFAULT_FLOOR = 1e-3  # 走行ピークの下限（無音時に張り付く値。ノイズを 1.0 に誇張しない）
 
 # Supabase 逆引き設定（R9）。テーブル / 列名（id を引いて url を得る逆引き）。
 SUPABASE_TABLE = "urls"

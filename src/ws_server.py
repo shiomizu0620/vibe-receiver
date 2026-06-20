@@ -16,6 +16,7 @@ CLAUDE.md のアーキテクチャ方針との関係:
     {"type":"decoded","id":42}           # id 確定
     {"type":"url","url":"https://..."}   # 逆引き結果
     {"type":"open","url":"https://..."}  # オープン
+    {"type":"level","v":0.73}            # 受信中の振幅 0..1（段2: 波形のリアルタイム駆動）
 """
 import asyncio
 import json
