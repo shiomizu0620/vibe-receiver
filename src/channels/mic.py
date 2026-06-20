@@ -34,7 +34,8 @@ class MicChannel(Channel):
         ch.stop()            # 停止（未開始でも多重呼びでも安全）
 
     パラメータ（帯域・閾値・デバウンス）はチャンネル固有なのでコンストラクタ引数。
-    既定値は仮値で、送信実機の録音から R8 で確定する（CLAUDE.md）。
+    既定の閾値・デバイスは config（R8 確定値）を単一ソースとして採る。帯域(lo/hi)・
+    デバウンスはまだ仮値（帯域チューニングは別途）。
     on_pulse はワーカースレッドから呼ばれる（ReplayChannel と同じ規約）。
     """
 
@@ -43,8 +44,8 @@ class MicChannel(Channel):
     _KEEP_PAD_MS = 50.0     # 持ち越すパルスの立ち上がり手前に残す余白（< GAP_MS）
     _MIN_PROCESS_MS = 200.0  # これだけ溜まるまで DSP を掛けない（フィルタの安定化用）
 
-    def __init__(self, device=None, fs=44100, lo=100.0, hi=400.0,
-                 threshold=0.02, min_duration_ms=30.0):
+    def __init__(self, device=config.MIC_DEVICE_DEFAULT, fs=44100, lo=100.0, hi=400.0,
+                 threshold=config.MIC_THRESHOLD_DEFAULT, min_duration_ms=30.0):
         self.device = device
         self.fs = int(fs)
         self.lo = float(lo)

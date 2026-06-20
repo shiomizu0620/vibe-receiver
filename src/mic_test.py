@@ -29,15 +29,19 @@ def main():
         print(f"依存モジュールが見つかりません: {e}")
         print("pip install sounddevice numpy scipy を実行してください。")
         sys.exit(1)
+    # config は純定数のみ（重い依存なし）なので遅延 import の必要はないが、
+    # 既定値の単一ソース化のためここで取り込む（main.py / mic.py と同じ config を参照）。
+    from src import config
 
     ap = argparse.ArgumentParser(description="マイクのパルス検出を数秒ためす")
-    ap.add_argument("--device", type=int, default=None,
+    ap.add_argument("--device", type=int, default=config.MIC_DEVICE_DEFAULT,
                     help="入力デバイス番号（python src/list_devices.py で確認）")
     ap.add_argument("--seconds", type=float, default=5.0, help="録音秒数（既定5）")
     ap.add_argument("--fs", type=int, default=44100)
     ap.add_argument("--lo", type=float, default=100.0, help="バンドパス下限Hz（仮値）")
     ap.add_argument("--hi", type=float, default=400.0, help="バンドパス上限Hz（仮値）")
-    ap.add_argument("--threshold", type=float, default=0.02, help="包絡線の閾値（仮値）")
+    ap.add_argument("--threshold", type=float, default=config.MIC_THRESHOLD_DEFAULT,
+                    help="包絡線の閾値（既定は config.MIC_THRESHOLD_DEFAULT）")
     ap.add_argument("--min-duration-ms", type=float, default=30.0, help="デバウンス長")
     args = ap.parse_args()
 
@@ -66,7 +70,7 @@ def main():
     print(f"検出パルス列: {result}")
     print(f"パルス数: {len(result)}")
     if not result:
-        print("ヒント: 0個でした。--threshold を下げる（例 0.005）か、")
+        print("ヒント: 0個でした。--threshold をさらに下げる（例 0.001）か、")
         print("        --lo/--hi を実機の振動周波数に合わせてください。")
         print("        入力デバイスは python src/list_devices.py で確認できます。")
 
