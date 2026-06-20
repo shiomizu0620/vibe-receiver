@@ -17,10 +17,10 @@ from src.display import (
     glyph_for_bit,
     kind_to_bit,
 )
-from src.main import Receiver, build_frame_pulses
+from src.main import Receiver, build_frame_pulses, build_x1_frame_pulses
 
 
-def _make_display(no_open=False, lookup=None):
+def _make_display(no_open=False, lookup=None, fun_sites=None, fun_picker=None):
     """StringIO 出力＋スタブ opener の Display を作る。戻り値: (display, buf, opened)。"""
     buf = io.StringIO()
     # force_terminal=False で ANSI を抑えた素のテキストにして assert しやすくする。
@@ -28,16 +28,25 @@ def _make_display(no_open=False, lookup=None):
     opened: list[str] = []
     if lookup is None:
         lookup = {42: "https://example.com"}.get
+    if fun_picker is None:
+        def fun_picker(sites):  # テストは決定的に先頭を選ぶ
+            return sites[0]
     display = Display(console=console, lookup=lookup, opener=opened.append,
-                      no_open=no_open, typing_speed=0)
+                      no_open=no_open, typing_speed=0,
+                      fun_sites=fun_sites, fun_picker=fun_picker)
     return display, buf, opened
 
 
-def _drive(display, recv, ids):
-    """main と同じ結線でパルスを流す（on_pulse=ライブ演出, feed=復号→on_frame）。"""
-    for pulse in build_frame_pulses(ids):
+def _drive_pulses(display, recv, pulses):
+    """main と同じ結線でパルス列を流す（on_pulse=ライブ演出, feed=復号→on_frame）。"""
+    for pulse in pulses:
         display.on_pulse(pulse)
         recv.feed(pulse)
+
+
+def _drive(display, recv, ids):
+    """id 列から replay 用パルスを流す。"""
+    _drive_pulses(display, recv, build_frame_pulses(ids))
 
 
 def test_glyph_mapping():
@@ -84,10 +93,34 @@ def test_unknown_id_is_not_opened():
     assert opened == []
 
 
-def test_non_id_mode_frame_is_not_opened():
-    """id モード以外（id=None）のフレームは演出のみでオープンしない。"""
+def test_x1_checksum_ok_opens_url():
+    """X1（marker=1）checksum OK → 復元 URL がタイプ表示され、そのままオープンされる。"""
     display, buf, opened = _make_display(no_open=False)
-    display.on_frame(Frame(mode=1, payload_bits=[1, 0, 1, 0, 1, 0, 1, 0], id=None))
+    recv = Receiver(on_frame=display.on_frame)
+    _drive_pulses(display, recv, build_x1_frame_pulses("github.com"))
     out = buf.getvalue()
-    assert "mode=1" in out
+    assert "X1" in out                          # X1 受信パネル
+    assert "https://github.com" in out          # タイプライターで出した URL
+    assert opened == ["https://github.com"]
+
+
+def test_x1_checksum_ng_opens_fun_site():
+    """X1 checksum NG（ビット反転）→ 運命のサイトが開く（FUN_SITES から決定的に先頭）。"""
+    display, buf, opened = _make_display(
+        no_open=False, fun_sites=["https://fate.example/roll"],
+        fun_picker=lambda sites: sites[0])
+    recv = Receiver(on_frame=display.on_frame)
+    _drive_pulses(display, recv, build_x1_frame_pulses("github.com", corrupt_bits=3))
+    out = buf.getvalue()
+    assert "運命" in out                         # 「運命のサイトへ🎲」表示
+    assert "https://github.com" not in out       # 壊れたので本来の URL は開かない
+    assert opened == ["https://fate.example/roll"]
+
+
+def test_unknown_mode_frame_is_not_opened():
+    """将来拡張の未対応モード（mode=2 等）は演出のみでオープンしない。"""
+    display, buf, opened = _make_display(no_open=False)
+    display.on_frame(Frame(mode=2, payload_bits=[1, 0, 1, 0]))
+    out = buf.getvalue()
+    assert "mode=2" in out
     assert opened == []
