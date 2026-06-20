@@ -13,6 +13,8 @@ from collections.abc import Callable
 from time import monotonic
 from typing import NamedTuple
 
+from .. import config
+
 
 class PulseEvent(NamedTuple):
     """ON 区間1つ。start_ms=立ち上がり時刻, duration_ms=ON継続長（どちらもミリ秒）。
@@ -45,8 +47,10 @@ class LevelStream:
     push はチャンネルのワーカースレッドから順に呼ばれる前提でロックは持たない。
     """
 
-    def __init__(self, on_level: OnLevel | None, rate_hz: float = 40.0,
-                 peak_decay: float = 0.9, floor: float = 1e-3):
+    def __init__(self, on_level: OnLevel | None,
+                 rate_hz: float = config.LEVEL_RATE_HZ,
+                 peak_decay: float = config.LEVEL_PEAK_DECAY,
+                 floor: float = config.LEVEL_DEFAULT_FLOOR):
         self._on_level = on_level
         self._interval = 1.0 / rate_hz if rate_hz > 0 else 0.0
         self._decay = float(peak_decay)
