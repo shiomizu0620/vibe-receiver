@@ -25,11 +25,6 @@ from src.decode import DecodeError, decode_pulses
 from src.display import Display
 from src.lookup import get_lookup
 
-# バッファ上限: フレーム未完が続いてもノイズで無限に伸びないよう、末尾だけ残してトリムする閾値（定数は config）。
-# X1（可変長・最大63文字）は id フレームよりずっと長いので、最長 X1 フレームを収容できる値にする
-# （短すぎると長い X1 を形成中にプリアンブルごと末尾トリムで捨ててしまい復号できない）。
-_MAX_BUFFER_PULSES = config.MAX_BUFFER_FRAMES * config.X1_MAX_FRAME_PULSES
-
 
 class Receiver:
     """PulseEvent を1個ずつ受け取り、フレームが揃うたび on_frame を呼ぶ受信ループの心臓部。
@@ -50,10 +45,10 @@ class Receiver:
             frame = decode_pulses(self._buffer)
         except DecodeError:
             # まだフレーム未完 or プリアンブル未検出。落ちずに次のパルスを待つ（受信ループの肝）。
-            if len(self._buffer) > _MAX_BUFFER_PULSES:
+            if len(self._buffer) > config.MAX_BUFFER_PULSES:
                 # ノイズだけが流れ続けても無限に伸びないよう末尾だけ残す。
                 # 形成中プリアンブルは末尾に残るので、有効フレームの取りこぼしにはならない。
-                self._buffer = self._buffer[-_MAX_BUFFER_PULSES:]
+                self._buffer = self._buffer[-config.MAX_BUFFER_PULSES:]
             return
         # 1メッセージ確定 → バッファを空にして次メッセージの待ち受けへ続行する。
         self._buffer.clear()
@@ -119,11 +114,20 @@ def _parse_ids(spec: str) -> list[int]:
     return [int(part) for part in spec.split(",") if part.strip() != ""]
 
 
+def _non_negative_int(text: str) -> int:
+    """0 以上の整数だけ受け付ける argparse 用 type（負値は「反転0本＝無補正」と紛らわしいので弾く）。"""
+    value = int(text)  # 数値でなければ argparse が ArgumentTypeError 相当に変換する
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"0 以上で指定してください（受け取った値: {value}）")
+    return value
+
+
 def _build_channel(args):
     """--channel と各オプションから Channel を組み立てて返す。"""
     if args.channel == "replay":
-        if args.x1_url:
+        if args.x1_url is not None:
             # X1（URL直接モード）を流す。--x1-corrupt N で checksum NG を意図的に作れる（運命サイトのデモ）。
+            # 空文字（--x1-url ""）も「X1 指定あり」として扱う（is not None で id モードへ落とさない）。
             pulses = build_x1_frame_pulses(args.x1_url, corrupt_bits=args.x1_corrupt)
         else:
             pulses = build_frame_pulses(_parse_ids(args.ids))
@@ -145,8 +149,8 @@ def main(argv=None) -> None:
                     help="replay で流す id 列（カンマ区切り。連続受信の実証用に既定で2件）")
     ap.add_argument("--x1-url", type=str, default=None,
                     help="replay で X1（URL直接モード）を流す短URL（例 github.com）。指定時は --ids より優先")
-    ap.add_argument("--x1-corrupt", type=int, default=0, metavar="N",
-                    help="X1 フレームの本体ビットを N 本反転して checksum NG を起こす（運命サイトのデモ用）")
+    ap.add_argument("--x1-corrupt", type=_non_negative_int, default=0, metavar="N",
+                    help="X1 フレームの本体ビットを N 本（0以上）反転して checksum NG を起こす（運命サイトのデモ用）")
     ap.add_argument("--speed", type=float, default=1.0,
                     help="replay の再生速度（1.0=実時間, 0=即時, >1=早送り）")
     # mic 用（既定値は MicChannel / debug_view に合わせた仮値。確定は R8）

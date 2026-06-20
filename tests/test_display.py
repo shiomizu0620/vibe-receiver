@@ -29,7 +29,8 @@ def _make_display(no_open=False, lookup=None, fun_sites=None, fun_picker=None):
     if lookup is None:
         lookup = {42: "https://example.com"}.get
     if fun_picker is None:
-        fun_picker = lambda sites: sites[0]  # テストは決定的に先頭を選ぶ
+        def fun_picker(sites):  # テストは決定的に先頭を選ぶ
+            return sites[0]
     display = Display(console=console, lookup=lookup, opener=opened.append,
                       no_open=no_open, typing_speed=0,
                       fun_sites=fun_sites, fun_picker=fun_picker)

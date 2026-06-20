@@ -83,11 +83,18 @@ def _bits_to_int(bits) -> int:
 
 
 def split_scheme(url: str) -> tuple[str, str]:
-    """URL を (scheme, body) に分ける。スキーム省略時は https 既定。"""
+    """URL を (scheme, body) に分ける。スキーム省略時は https 既定。
+
+    `://` を含むのに X1_SCHEMES 外のスキーム（例 ftp://）は、本体側へ握り込んで黙って
+    壊れた URL を作るのを避け、X1Error で明示的に弾く。
+    """
     for bit, name in config.X1_SCHEMES.items():
         prefix = f"{name}://"
         if url.startswith(prefix):
             return name, url[len(prefix):]
+    if "://" in url:
+        scheme = url.split("://", 1)[0]
+        raise X1Error(f"未対応のスキームです: {scheme!r}（対応: {sorted(config.X1_SCHEMES.values())}）")
     return config.X1_SCHEMES[0], url  # スキーム無しは https 既定
 
 
