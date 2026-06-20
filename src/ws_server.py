@@ -61,6 +61,9 @@ class WsServer:
         # 既定 None なら何もしない（切断は無視・配信専用運用と同じ）。
         self._on_no_clients = on_no_clients
         self._no_clients_grace = no_clients_grace
+        # 「全クライアント切断」猶予タイマーのハンドル（call_later の戻り）。再接続・再スケジュール時に
+        # 必ずキャンセルして、古いタイマーが最新の切断より早く発火する誤終了を防ぐ。
+        self._no_clients_timer: asyncio.TimerHandle | None = None
         self._clients: set = set()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -136,6 +139,9 @@ class WsServer:
         websockets のバージョン差（旧 API は (websocket, path)）を吸収するため。
         """
         self._clients.add(websocket)
+        # 繋ぎ直された＝前の切断で張った猶予タイマーは無効。必ず取り消す
+        # （古いタイマーが最新の切断時刻より早く発火して誤終了するのを防ぐ）。
+        self._cancel_no_clients_timer()
         try:
             async for raw in websocket:
                 self._on_client_message(raw)  # quit コマンドだけ処理（他は無視）
@@ -149,7 +155,17 @@ class WsServer:
             # 全クライアントが居なくなったら猶予タイマーを張る（ブラウザが閉じられた可能性）。
             # この handler はサーバーのループ上で走っているので call_later をそのまま使える。
             if not self._clients and self._on_no_clients is not None and self._loop is not None:
-                self._loop.call_later(self._no_clients_grace, self._check_no_clients)
+                # 既存タイマーを畳んでから張り直す＝常に「最新の切断時刻」基準の猶予にする。
+                self._cancel_no_clients_timer()
+                self._no_clients_timer = self._loop.call_later(
+                    self._no_clients_grace, self._check_no_clients
+                )
+
+    def _cancel_no_clients_timer(self) -> None:
+        """保留中の「全切断」猶予タイマーがあれば取り消す（サーバーのループ上から呼ぶ）。"""
+        if self._no_clients_timer is not None:
+            self._no_clients_timer.cancel()
+            self._no_clients_timer = None
 
     def _check_no_clients(self) -> None:
         """猶予後の判定。まだ誰も繋いでいなければ「ブラウザが閉じられた」とみなして通知する。
@@ -157,6 +173,7 @@ class WsServer:
         猶予内に繋ぎ直っていれば（ページ更新など）クライアントが居るので何もしない。
         コールバックは冪等想定（threading.Event.set 等）なので、重複発火しても害は無い。
         """
+        self._no_clients_timer = None  # このタイマーは発火した。ハンドルを手放す
         if self._clients or self._on_no_clients is None:
             return
         try:
