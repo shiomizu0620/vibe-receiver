@@ -24,6 +24,15 @@ FRAME_PULSES = PREAMBLE_REPEAT + 1 + ID_BITS  # 1フレームのONパルス数: 
 MAX_BUFFER_FRAMES = 2        # バッファ上限をフレーム何個分まで許すか（ノイズで無限に伸びるのを防ぐ）
 FRAME_GAP_MULTIPLIER = 3     # 連続受信時のフレーム境界ギャップを GAP_MS の何倍空けるか
 
+# mic チャンネルの既定値（R8 実音チューニングの確定値。CLAUDE.md「定数は config.py のみ」に従い集約）。
+# main.py の argparse 既定としてここから流す（--threshold / --device で従来どおり上書き可能）。
+# 実機スマホを内蔵マイクで受信できた実測閾値。MicChannel 既定の 0.02 では弱すぎて拾えなかった。
+MIC_THRESHOLD_DEFAULT = 0.0025
+# 入力デバイス番号。None = システム既定の入力デバイス（内蔵マイクが既定入力ならこのままで受信できる）。
+#   ★マシン依存：固定したい場合は実機で番号を確認して数値に置き換える（他PCでは番号が変わる点に注意）。
+#   確認: python -c "import sounddevice as sd; print(sd.query_devices())"
+MIC_DEVICE_DEFAULT = None
+
 # ─────────────────────────────────────────────────────────────────────────
 # X1: URL直接符号化モード ★実験的・未確定仕様（PROTOCOL.md 未反映）
 #   PROTOCOL.md v1.0 はモードマーカー=1 を「直接符号化モード（stretch）」と予約し、

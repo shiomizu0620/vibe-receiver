@@ -1,7 +1,7 @@
 """パイプライン結合・受信ループ（R6）。
 
     python -m src.main --channel replay          # マイク無しで通し（id=42,7 を連続受信）
-    python -m src.main --channel mic --threshold 0.02   # 内蔵マイクで受信
+    python -m src.main --channel mic             # 内蔵マイクで受信（閾値/デバイスは config の既定が効く）
     python src/main.py --channel replay          # 直叩きでも動く（下の sys.path 参照）
 
 チャンネル（mic / replay）→ PulseEvent 列 → decode で id 復元 → lookup スタブで URL 表示、を結合する。
@@ -153,12 +153,15 @@ def main(argv=None) -> None:
                     help="X1 フレームの本体ビットを N 本（0以上）反転して checksum NG を起こす（運命サイトのデモ用）")
     ap.add_argument("--speed", type=float, default=1.0,
                     help="replay の再生速度（1.0=実時間, 0=即時, >1=早送り）")
-    # mic 用（既定値は MicChannel / debug_view に合わせた仮値。確定は R8）
-    ap.add_argument("--device", type=int, default=None, help="入力デバイス番号（mic）")
+    # mic 用。device/threshold の既定は R8 確定値を config.py から流す（CLI で渡せば従来どおり上書き）。
+    # lo/hi/fs/min-duration はまだ仮値（帯域チューニングは別途）。
+    ap.add_argument("--device", type=int, default=config.MIC_DEVICE_DEFAULT,
+                    help=f"入力デバイス番号（mic, 既定 {config.MIC_DEVICE_DEFAULT}=システム既定入力）")
     ap.add_argument("--fs", type=int, default=44100, help="サンプリング周波数（mic）")
     ap.add_argument("--lo", type=float, default=100.0, help="バンドパス下限Hz（mic, 仮値）")
     ap.add_argument("--hi", type=float, default=400.0, help="バンドパス上限Hz（mic, 仮値）")
-    ap.add_argument("--threshold", type=float, default=0.02, help="包絡線の閾値（mic, 仮値）")
+    ap.add_argument("--threshold", type=float, default=config.MIC_THRESHOLD_DEFAULT,
+                    help=f"包絡線の閾値（mic, 既定 {config.MIC_THRESHOLD_DEFAULT}）")
     ap.add_argument("--min-duration-ms", type=float, default=30.0, help="デバウンス長（mic）")
     ap.add_argument("--no-open", action="store_true",
                     help="URL を表示するだけでブラウザを開かない")
