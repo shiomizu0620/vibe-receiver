@@ -6,6 +6,7 @@ JSON で届くことを確認する。websockets 未導入の環境では skip�
 import asyncio
 import json
 import socket
+import threading
 
 import pytest
 
@@ -94,3 +95,85 @@ def test_start_failure_is_reported():
         clash.stop()
     finally:
         first.stop()
+
+
+async def _send_messages(port: int, messages: list) -> None:
+    """クライアントを繋ぎ、messages を順に送る（quit コマンド等のクライアント→サーバー方向）。
+
+    各要素は str ならそのまま、dict なら JSON 化して送る（壊れた JSON のテストにも使えるよう）。
+    """
+    async with websockets.connect(f"ws://{_HOST}:{port}") as client:
+        for msg in messages:
+            await client.send(msg if isinstance(msg, str) else json.dumps(msg))
+        await asyncio.sleep(0.1)  # サーバー側スレッドが処理する猶予
+
+
+def test_quit_command_invokes_callback():
+    """クライアントが {"type":"quit"} を送ると on_quit コールバックが呼ばれる。"""
+    port = _free_port()
+    quit_event = threading.Event()  # set はスレッド安全（サーバーのループスレッドから呼ばれる）
+    server = WsServer(host=_HOST, port=port, on_quit=quit_event.set)
+    assert server.start() is True
+    try:
+        asyncio.run(_send_messages(port, [{"type": "quit"}]))
+        assert quit_event.wait(2.0), "quit を送っても on_quit が呼ばれなかった"
+    finally:
+        server.stop()
+
+
+def test_non_quit_messages_are_ignored():
+    """quit 以外・壊れた JSON ではコールバックを呼ばず受け流す（接続も切らない）。"""
+    port = _free_port()
+    quit_event = threading.Event()
+    server = WsServer(host=_HOST, port=port, on_quit=quit_event.set)
+    assert server.start() is True
+    try:
+        asyncio.run(_send_messages(port, [{"type": "listening"}, "not json", {"foo": "bar"}]))
+        assert not quit_event.is_set(), "quit 以外のメッセージで on_quit が誤って呼ばれた"
+    finally:
+        server.stop()
+
+
+async def _wait_clients(server: WsServer, n: int, timeout: float = 2.0) -> None:
+    """server.client_count が n 以上になるまで条件待ち（固定 sleep のフレーク回避）。"""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while server.client_count < n and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.01)
+    assert server.client_count >= n, f"クライアント数 {n} 到達がタイムアウトしました"
+
+
+def test_disconnect_invokes_no_clients_callback():
+    """全クライアント切断後、猶予を過ぎても繋ぎ直さなければ on_no_clients が呼ばれる。"""
+    port = _free_port()
+    gone = threading.Event()
+    server = WsServer(host=_HOST, port=port, on_no_clients=gone.set, no_clients_grace=0.2)
+    assert server.start() is True
+    try:
+        async def _connect_then_close():
+            async with websockets.connect(f"ws://{_HOST}:{port}"):
+                await _wait_clients(server, 1)
+            # with を抜けてクローズ → サーバー側で猶予タイマーが張られる
+        asyncio.run(_connect_then_close())
+        assert gone.wait(2.0), "切断後に on_no_clients が呼ばれなかった"
+    finally:
+        server.stop()
+
+
+def test_reconnect_within_grace_does_not_fire():
+    """猶予内に繋ぎ直れば（ページ更新相当）on_no_clients は発火しない。"""
+    port = _free_port()
+    gone = threading.Event()
+    server = WsServer(host=_HOST, port=port, on_no_clients=gone.set, no_clients_grace=0.6)
+    assert server.start() is True
+    try:
+        async def _close_then_reconnect():
+            async with websockets.connect(f"ws://{_HOST}:{port}"):  # 1本目
+                await _wait_clients(server, 1)
+            # 切断 → 猶予タイマー開始。猶予(0.6s)内に2本目を繋ぐ＝更新相当
+            async with websockets.connect(f"ws://{_HOST}:{port}"):  # 2本目
+                await _wait_clients(server, 1)
+                await asyncio.sleep(0.9)  # 猶予を超えて保持（この間に発火しないこと）
+        asyncio.run(_close_then_reconnect())
+        assert not gone.is_set(), "更新相当の再接続後に on_no_clients が誤発火した"
+    finally:
+        server.stop()

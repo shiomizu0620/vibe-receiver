@@ -17,6 +17,9 @@ CLAUDE.md のアーキテクチャ方針との関係:
     {"type":"url","url":"https://..."}   # 逆引き結果
     {"type":"open","url":"https://..."}  # オープン
     {"type":"level","v":0.73}            # 受信中の振幅 0..1（段2: 波形のリアルタイム駆動）
+
+クライアント→サーバーで受け付けるコマンド（唯一の逆方向。演出HTMLの「終了」ボタン）:
+    {"type":"quit"}                      # 受信ループを正常終了させる（on_quit コールバックを呼ぶ）
 """
 import asyncio
 import json
@@ -43,9 +46,21 @@ class WsServer:
     一切ブロックしない。クライアントが居なければ何もしない。
     """
 
-    def __init__(self, host: str = config.WS_HOST, port: int = config.WS_PORT):
+    def __init__(self, host: str = config.WS_HOST, port: int = config.WS_PORT,
+                 on_quit=None, on_no_clients=None,
+                 no_clients_grace: float = config.WS_DISCONNECT_GRACE_S):
         self._host = host
         self._port = port
+        # ブラウザ演出の「終了」ボタン（{"type":"quit"}）を受けたとき呼ぶコールバック。
+        # 既定 None なら client→server メッセージは従来どおり受け流すだけ（配信専用）。
+        # コールバックはサーバーのイベントループスレッドから呼ばれるので、軽く・スレッド安全に
+        # 済むもの（threading.Event.set 等）を渡すこと。main がここに受信ループの停止を結線する。
+        self._on_quit = on_quit
+        # 全クライアントが切断され、no_clients_grace 秒後もまだ誰も繋ぎ直さなければ呼ぶコールバック。
+        # 「ブラウザを閉じたら Python も終了」を実現する（main が受信ループ停止を結線する）。
+        # 既定 None なら何もしない（切断は無視・配信専用運用と同じ）。
+        self._on_no_clients = on_no_clients
+        self._no_clients_grace = no_clients_grace
         self._clients: set = set()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -116,14 +131,14 @@ class WsServer:
     async def _handler(self, websocket, path=None) -> None:
         """1クライアント分の接続。集合に登録し、切断まで保持する。
 
-        段1ではクライアントからの受信は使わないが、async for で受け流すことで
-        接続を維持し、ping/pong などはライブラリ任せにする。path 引数は
+        クライアント→サーバーは「終了」コマンド（{"type":"quit"}）のみ扱い、それ以外は
+        受け流して接続を維持する（ping/pong などはライブラリ任せ）。path 引数は
         websockets のバージョン差（旧 API は (websocket, path)）を吸収するため。
         """
         self._clients.add(websocket)
         try:
-            async for _ in websocket:
-                pass  # クライアント→サーバー方向は段1では未使用（受け流す）
+            async for raw in websocket:
+                self._on_client_message(raw)  # quit コマンドだけ処理（他は無視）
         except websockets.ConnectionClosed:
             pass      # 正常・異常いずれの切断もここで収束（finally で集合から除去）
         except Exception:
@@ -131,6 +146,42 @@ class WsServer:
             _LOGGER.debug("WebSocket ハンドラで予期しない例外", exc_info=True)
         finally:
             self._clients.discard(websocket)
+            # 全クライアントが居なくなったら猶予タイマーを張る（ブラウザが閉じられた可能性）。
+            # この handler はサーバーのループ上で走っているので call_later をそのまま使える。
+            if not self._clients and self._on_no_clients is not None and self._loop is not None:
+                self._loop.call_later(self._no_clients_grace, self._check_no_clients)
+
+    def _check_no_clients(self) -> None:
+        """猶予後の判定。まだ誰も繋いでいなければ「ブラウザが閉じられた」とみなして通知する。
+
+        猶予内に繋ぎ直っていれば（ページ更新など）クライアントが居るので何もしない。
+        コールバックは冪等想定（threading.Event.set 等）なので、重複発火しても害は無い。
+        """
+        if self._clients or self._on_no_clients is None:
+            return
+        try:
+            self._on_no_clients()
+        except Exception:
+            _LOGGER.debug("on_no_clients コールバックで例外", exc_info=True)
+
+    def _on_client_message(self, raw) -> None:
+        """クライアント→サーバーのメッセージを処理する（現状 quit コマンドのみ）。
+
+        壊れた JSON・未知の type は黙って無視し（外部入力で落とさない）、
+        {"type":"quit"} のときだけ on_quit コールバックを呼ぶ。
+        """
+        if self._on_quit is None:
+            return
+        try:
+            event = json.loads(raw)
+        except (TypeError, ValueError):
+            return  # JSON でない・bytes 以外など。配信専用運用と同じく受け流す。
+        if isinstance(event, dict) and event.get("type") == config.WS_COMMAND_QUIT:
+            try:
+                self._on_quit()
+            except Exception:
+                # 終了通知の失敗で接続ハンドラ全体を巻き込まない（原因は debug に残す）。
+                _LOGGER.debug("on_quit コールバックで例外", exc_info=True)
 
     def stop(self, timeout: float = 5.0) -> None:
         """サーバーを止める。未起動でも多重呼び出しでも安全。"""

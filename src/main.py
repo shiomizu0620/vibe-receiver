@@ -14,7 +14,8 @@ rich のタイプ風演出と webbrowser でのオープンは display.py（R7�
 import argparse
 import pathlib
 import sys
-import time
+import threading
+import webbrowser
 
 # `python src/main.py` 直叩きでも src.* を解決できるようにリポジトリ root を通す（debug_view.py と同じ）
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
@@ -171,6 +172,8 @@ def main(argv=None) -> None:
                     help=f"WebSocket バインドホスト（既定 {config.WS_HOST}）")
     ap.add_argument("--ws-port", type=int, default=config.WS_PORT,
                     help=f"WebSocket ポート（既定 {config.WS_PORT}）")
+    ap.add_argument("--no-browser", action="store_true",
+                    help="--serve 時に演出HTMLをブラウザで自動オープンしない（既定は自動で開く）")
     args = ap.parse_args(argv)
 
     # Windows の既定コンソールが cp932 でも演出の記号で落ちないよう、出力を UTF-8 にしておく。
@@ -182,6 +185,9 @@ def main(argv=None) -> None:
             pass
 
     channel = _build_channel(args)
+    # 受信ループの停止フラグ。ブラウザ演出の「終了」ボタン（WS quit）か Ctrl+C で立つ。
+    # quit はサーバーのイベントループスレッドから set されるので Event（スレッド安全）を使う。
+    stop_event = threading.Event()
     # --serve 時のみ WebSocket サーバーを起動（websockets 依存も serve 時のみ要求する）。
     # broadcast を Display.on_event に渡すと、進行イベントがブラウザ演出へも流れる
     # （既存の rich 演出は消さず、配信を「追加」するだけ。受信はブロックしない別スレッド）。
@@ -193,12 +199,17 @@ def main(argv=None) -> None:
     try:
         if args.serve:
             from src.ws_server import WsServer
-            ws_server = WsServer(host=args.ws_host, port=args.ws_port)
+            # on_quit にループ停止を結線。ブラウザの「終了」ボタンで Python も一緒に止まる。
+            # on_no_clients も同じく結線。ブラウザのタブ/窓を閉じる（WS が全部切れる）と、
+            # 数秒の猶予後に受信ループを抜けてターミナルへ戻る（ページ更新では誤終了しない）。
+            ws_server = WsServer(host=args.ws_host, port=args.ws_port,
+                                 on_quit=stop_event.set,
+                                 on_no_clients=stop_event.set)
             if ws_server.start():
                 ws_broadcast = ws_server.broadcast  # listen 成功時だけ配信を有効化
                 print(f"[main] --serve: WebSocket 配信 ws://{args.ws_host}:{args.ws_port} で待受中",
                       file=sys.stderr)
-                _print_browser_hint(args)
+                _open_browser(args)
             else:
                 # listen 失敗（ポート競合など）。ブラウザ配信は無効だが受信・ターミナル演出は続行する。
                 err = ws_server.start_error
@@ -231,8 +242,12 @@ def main(argv=None) -> None:
                   file=sys.stderr)
         channel.start(on_pulse, on_level=on_level)
         # 受信ループ: 何メッセージでも待ち受ける。実処理はチャンネルのワーカースレッドが on_pulse 経由で進める。
-        while True:
-            time.sleep(0.5)
+        # ブラウザ演出の「終了」ボタン（WS quit → stop_event）か Ctrl+C で抜ける。
+        while not stop_event.wait(0.5):
+            pass
+        # ここに来るのは quit を受けたとき（Ctrl+C は except へ）。どちらも footer を出して締める。
+        if display is not None:
+            display.show_footer()
     except KeyboardInterrupt:
         if display is not None:
             display.show_footer()
@@ -242,14 +257,38 @@ def main(argv=None) -> None:
             ws_server.stop()
 
 
-def _print_browser_hint(args) -> None:
-    """ブラウザの開き方を案内する。既定アドレス以外なら接続先をクエリで合わせる方法も示す。"""
-    if args.ws_host == config.WS_HOST and args.ws_port == config.WS_PORT:
-        print("[main] ブラウザで web/index.html を開いてください", file=sys.stderr)
+def _browser_url(args) -> str:
+    """演出HTML（web/index.html）の file:// URL を作る。
+
+    web/index.html は既定で localhost:8765 へ繋ぐので、非既定ホスト/ポート時だけ
+    接続先を ?wsHost=…&wsPort=… のクエリで付与して合わせる（JS 側がこれを読む）。
+    """
+    html_path = pathlib.Path(__file__).resolve().parent.parent / "web" / "index.html"
+    url = html_path.as_uri()
+    if args.ws_host != config.WS_HOST or args.ws_port != config.WS_PORT:
+        from urllib.parse import urlencode
+        url += "?" + urlencode({"wsHost": args.ws_host, "wsPort": args.ws_port})
+    return url
+
+
+def _open_browser(args) -> None:
+    """--serve 成功時に演出HTMLをブラウザで自動オープンする（--no-browser で抑止）。
+
+    自分で毎回開く手間を省くのが目的。--no-browser 指定時・自動オープン失敗時は、
+    代わりに手動で開く URL を案内する（配信自体は続行する）。
+    """
+    url = _browser_url(args)
+    if args.no_browser:
+        print(f"[main] ブラウザで演出を見るには {url} を開いてください", file=sys.stderr)
+        return
+    try:
+        opened = webbrowser.open(url)
+    except Exception:
+        opened = False
+    if opened:
+        print(f"[main] 演出HTMLをブラウザで開きました（{url}）", file=sys.stderr)
     else:
-        # web/index.html は既定で localhost:8765 へ繋ぐので、非既定時はクエリで接続先を指定する。
-        print(f"[main] ブラウザで web/index.html を開いてください"
-              f"（接続先を合わせるには ?wsHost={args.ws_host}&wsPort={args.ws_port} を付与）",
+        print(f"[main] ブラウザを自動で開けませんでした。手動で {url} を開いてください",
               file=sys.stderr)
 
 

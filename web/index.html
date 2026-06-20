@@ -36,6 +36,9 @@
   .conn::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--faint);transition:.3s}
   .conn.on{color:#54e08a;border-color:color-mix(in srgb,#54e08a 45%,var(--edge))}
   .conn.on::before{background:#54e08a;box-shadow:0 0 8px 1px rgba(84,224,138,.6)}
+  /* 終了ボタン: ターミナルへ戻らず受信を止めるための制御。hover で hot 色 */
+  .quit{font-size:12px;letter-spacing:2px;padding:6px 12px}
+  .quit:hover:not(:disabled){border-color:var(--hot);color:var(--hot)}
 
   .stage{flex:1;display:flex;flex-direction:column;justify-content:center;gap:20px;padding:26px 22px 30px;max-width:1100px;width:100%;margin:0 auto}
 
@@ -98,6 +101,7 @@
     <div class="brand"><span class="s">VIBE</span><span class="l">CODE</span><span class="sub">受信モニター</span></div>
     <div class="status"><span class="led" id="led"></span><span id="statusText">待機中 — 振動を待っています</span></div>
     <span class="conn" id="conn" title="Python受信側（--serve）への WebSocket 接続状態">未接続</span>
+    <button type="button" class="quit" id="quitBtn" title="受信を終了してこのタブを閉じる">■ 終了</button>
   </div>
 
   <div class="stage">
@@ -329,6 +333,7 @@
   const wsPort = wsParams.get("wsPort") || "8765";
   const WS_URL = `${wsScheme}://${wsHost}:${wsPort}`;
   let ws=null, reconnectTimer=null, typeTimer=null;
+  let quitting=false;   // 「終了」ボタン押下後は再接続せず、切断表示も出さない
 
   function setConn(ok){
     connEl.textContent = ok ? "接続済み" : "未接続";
@@ -388,13 +393,39 @@
     ws = sock;
     sock.onopen = ()=> setConn(true);
     sock.onmessage = (m)=>{ try { handleEvent(JSON.parse(m.data)); } catch(_){} };
-    sock.onclose = ()=>{ setConn(false); lastHue=-1; idle(); scheduleReconnect(); };  // 切れたら波形を静め自動再接続
+    sock.onclose = ()=>{ if(quitting) return; setConn(false); lastHue=-1; idle(); scheduleReconnect(); };  // 切れたら波形を静め自動再接続（終了時は何もしない）
     sock.onerror = ()=>{ try { sock.close(); } catch(_){} };       // close 経由で再接続へ
   }
   function scheduleReconnect(){
+    if(quitting) return;   // 終了要求後は再接続しない
     clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(connect, 1500);
   }
+
+  // 「終了」ボタン: 受信側へ quit を送って Python を止め、できればこのタブも閉じる。
+  // window.close() は「スクリプトが開いた窓」しか閉じられない仕様で、webbrowser.open で
+  // 開いたタブでは無効なことが多い。閉じられない場合に備えて案内メッセージも残す。
+  const quitBtn = document.getElementById("quitBtn");
+  function requestQuit(){
+    if(quitting) return;
+    quitting = true;
+    quitBtn.disabled = true;
+    clearTimeout(reconnectTimer);
+    try {
+      if(ws && ws.readyState === WebSocket.OPEN){ ws.send(JSON.stringify({type:"quit"})); }
+    } catch(_){}
+    clearInterval(typeTimer);
+    setState("","受信を終了しました");
+    connEl.textContent = "終了"; connEl.classList.remove("on");
+    idle();
+    // 送信が飛ぶ猶予を置いてからタブを閉じる。閉じられなければ案内を表示する。
+    setTimeout(()=>{
+      window.close();
+      openrow.textContent = "→ 受信を終了しました（このタブは閉じて構いません）";
+      openrow.classList.remove("go");
+    }, 200);
+  }
+  quitBtn.addEventListener("click", requestQuit);
 
   // boot
   window.addEventListener("resize", ()=>{const r=running; resize();});
