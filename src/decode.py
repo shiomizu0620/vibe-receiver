@@ -47,12 +47,16 @@ def decode_pulses(pulses: list[tuple[float, float]]) -> Frame:
     """
     kinds = [classify_pulse(d) for _, d in pulses]
 
-    # プリアンブル検出: preamble が2回連続する位置を探す
+    # プリアンブル検出: preamble が2回連続する位置を探す。
+    # 複数見つかったら **最後の対** を採る（break せず上書き）＝最新の送信が常に勝つ。
+    # 送信を途中でミスって叩き直したとき、古い打ち損じ＋プリアンブルがバッファに残っていても
+    # 新しいプリアンブルへ自動で同期し直す（手動演奏の「やり直し」が終了・再起動なしで効く）。
+    # 逆に最初の対へロックすると、9パルス以内に現れる新しいプリアンブルで
+    # "unexpected preamble inside frame" になり、再送が永久に通らなくなる。
     start = None
     for i in range(len(kinds) - 1):
         if kinds[i] == "preamble" and kinds[i + 1] == "preamble":
-            start = i + 2
-            break
+            start = i + 2   # break しない＝最後に見つけた対が残る
     if start is None:
         raise DecodeError("preamble not found")
 
