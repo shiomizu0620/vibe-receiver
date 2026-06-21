@@ -34,6 +34,17 @@ def test_manual_performance_jitter():
     assert decode_pulses(make_pulses(bits, jitter)).id == 178
 
 
+def test_resync_to_latest_preamble_after_botched_send():
+    """送信ミス（プリアンブル＋数bitで中断）後に叩き直すと、最新フレームへ同期し直す。
+
+    古い打ち損じ（プリアンブル対＋途中まで）がバッファに残っていても、最後のプリアンブル対を
+    採るので新しいフレームを読む。最初の対にロックしていた頃は再送が通らなかった回帰防止。
+    """
+    botched = make_pulses([1, 0])[:2 + 1 + 2]  # プリアンブル2+モード+2bitで中断した打ち損じ
+    fresh = make_pulses([0, 0, 1, 0, 1, 0, 1, 0])  # 改めて最初から id=42 を叩き直す
+    assert decode_pulses(botched + fresh).id == 42
+
+
 def test_no_preamble_raises():
     pulses = [(0, config.SHORT_MS), (300, config.LONG_MS)]
     with pytest.raises(DecodeError):
